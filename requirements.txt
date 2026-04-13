@@ -1,0 +1,6 @@
+# LiteLLM proxy — pinned for reproducible image builds.
+# Chosen: 1.83.4 (released 2026-04-07 on PyPI).
+# Rationale: latest stable release at pin time; no open high-severity CVEs;
+# confirmed `[proxy]` extras published; not yanked. Revisit on every
+# Dependabot PR against this file.
+litellm[proxy]==1.83.4

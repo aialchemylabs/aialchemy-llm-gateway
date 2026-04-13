@@ -1,0 +1,121 @@
+name: Build and publish image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - requirements.txt
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: aialchemylabs/aialchemy-llm-gateway
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract LiteLLM version from requirements.txt
+        id: version
+        run: |
+          VERSION=$(grep -oP 'litellm\[proxy\]==\K[0-9]+\.[0-9]+\.[0-9]+' requirements.txt)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not extract litellm[proxy] version from requirements.txt"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.1
+
+      - name: Sign image
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      - name: Scan image layers for secrets (both architectures)
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          TAG="v${{ steps.version.outputs.version }}"
+
+          # Enumerate the per-platform manifest digests from the manifest list
+          # so we inspect BOTH linux/amd64 and linux/arm64, not just the runner's
+          # native arch. docker history on a digest-pulled image is architecture-
+          # specific, so this guarantees coverage of every published variant.
+          mapfile -t DIGESTS < <(
+            docker buildx imagetools inspect "$IMAGE:$TAG" --raw \
+              | jq -r '.manifests[] | select(.platform.os=="linux") | "\(.platform.architecture) \(.digest)"'
+          )
+
+          if [ "${#DIGESTS[@]}" -eq 0 ]; then
+            echo "::error::No linux platform manifests found for $IMAGE:$TAG"
+            exit 1
+          fi
+
+          FAIL=0
+          for entry in "${DIGESTS[@]}"; do
+            ARCH="${entry%% *}"
+            DIGEST="${entry##* }"
+            echo "::group::Scanning $ARCH ($DIGEST)"
+            docker pull "$IMAGE@$DIGEST"
+            docker history --no-trunc "$IMAGE@$DIGEST" > "/tmp/history-$ARCH.txt"
+            if grep -iE '(API_KEY|SECRET|TOKEN|PASSWORD)' "/tmp/history-$ARCH.txt"; then
+              echo "::error::Secret-shaped string found in $ARCH image layers"
+              FAIL=1
+            else
+              echo "No matches in $ARCH layers."
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ "$FAIL" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Secret scan passed on all architectures."
+
+      - name: Publish summary
+        run: |
+          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags: \`v${{ steps.version.outputs.version }}\`, \`v${{ steps.version.outputs.version }}-${{ github.sha }}\`, \`latest\`" >> "$GITHUB_STEP_SUMMARY"
