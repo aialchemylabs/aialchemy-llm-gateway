@@ -67,9 +67,13 @@ jobs:
         uses: sigstore/cosign-installer@v4.1.1
 
       - name: Sign image
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
         run: |
-          cosign sign --yes \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          echo "$REGISTRY_PASSWORD" | cosign login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          cosign sign --yes "$IMAGE_REF"
 
       - name: Scan image layers for secrets (both architectures)
         run: |
