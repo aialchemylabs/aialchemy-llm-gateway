@@ -11,8 +11,10 @@ litellm[proxy]==1.83.14
 # OpenTelemetry — required when litellm_settings.callbacks: ["otel"] is set.
 # LiteLLM imports from opentelemetry.sdk and the OTLP HTTP exporter; the
 # `[proxy]` extra does not pull these in, so we add them explicitly.
-# Pinned to a single 1.27.x stack so api / sdk / exporter stay aligned
+# Pinned to a single 1.31.x stack so api / sdk / exporter stay aligned
 # (mismatched versions across this trio are the usual breakage mode).
-opentelemetry-api==1.27.0
-opentelemetry-sdk==1.27.0
-opentelemetry-exporter-otlp-proto-http==1.27.0
+# 1.31.x is the lowest line whose importlib-metadata range is compatible
+# with litellm's pin (>=8.5.0) — earlier 1.27/1.28 conflict.
+opentelemetry-api==1.31.1
+opentelemetry-sdk==1.31.1
+opentelemetry-exporter-otlp-proto-http==1.31.1
