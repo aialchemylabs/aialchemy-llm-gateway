@@ -18,3 +18,10 @@ litellm[proxy]==1.83.14
 opentelemetry-api==1.31.1
 opentelemetry-sdk==1.31.1
 opentelemetry-exporter-otlp-proto-http==1.31.1
+
+# Prisma client — required when DATABASE_URL is set so LiteLLM can
+# initialize Postgres for spend logs, virtual keys, user/team mgmt, and
+# admin-UI auth. The `[proxy]` extra does NOT pull this. The Dockerfile
+# additionally runs `prisma generate` against LiteLLM's schema.prisma to
+# bake the engine binaries into the image.
+prisma==0.11.0
