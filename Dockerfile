@@ -9,10 +9,13 @@ FROM ghcr.io/astral-sh/uv:0.8.11 AS uv
 FROM python:3.13-slim AS runtime
 
 # curl is required by the HEALTHCHECK below; ca-certificates lets uv and
-# litellm talk to upstream providers over HTTPS. We clean apt lists in the
-# same RUN layer to keep the image under the 800 MB target (NFR #3).
+# litellm talk to upstream providers over HTTPS. nodejs is used by
+# `prisma generate` (the prisma CLI is a Node binary) so the LiteLLM
+# admin UI's DB-backed features (virtual keys, spend logs, user mgmt)
+# work when DATABASE_URL is set. We clean apt lists in the same RUN
+# layer to keep the image under the 800 MB target (NFR #3).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy the pinned uv binary from the uv stage. No pip install of uv — we
@@ -36,6 +39,13 @@ RUN uv pip install --system --no-cache -r /app/requirements.txt
 # Smoke import at build time. Catches the "upstream silently drops [proxy]"
 # failure mode called out in Requirements §Open questions.
 RUN python -c "import litellm.proxy.proxy_server"
+
+# Generate the Prisma client + engine binaries against the schema.prisma
+# that ships inside the litellm package. Doing this at build time means
+# container startup doesn't have to download Prisma engines from the CDN
+# every time, and the image is reproducible.
+RUN SCHEMA="$(python -c 'import os, litellm.proxy as p; print(os.path.join(os.path.dirname(p.__file__), "schema.prisma"))')" \
+ && prisma generate --schema="$SCHEMA"
 
 EXPOSE 4000
 
