@@ -15,7 +15,7 @@ FROM python:3.13-slim AS runtime
 # work when DATABASE_URL is set. We clean apt lists in the same RUN
 # layer to keep the image under the 800 MB target (NFR #3).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates nodejs \
+ && apt-get install -y --no-install-recommends curl ca-certificates nodejs libatomic1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy the pinned uv binary from the uv stage. No pip install of uv — we
