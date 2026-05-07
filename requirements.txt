@@ -1,6 +1,9 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.83.4 (released 2026-04-07 on PyPI).
-# Rationale: latest stable release at pin time; no open high-severity CVEs;
-# confirmed `[proxy]` extras published; not yanked. Revisit on every
-# Dependabot PR against this file.
-litellm[proxy]==1.83.4
+# Chosen: 1.83.14 (released 2026-05-02 on PyPI as the v1.83.14-stable line).
+# Rationale: brings ~1 month of upstream fixes since 1.83.4 — MCP stdio
+# command-execution hardening (1.83.7), authorization bypass closure and
+# OAuth/pass-through hardening (1.83.14), Anthropic streaming tool_use
+# preservation, Bedrock Anthropic cache-token double-count fix, and
+# pricing migration for 38 models. No documented breaking changes.
+# Revisit on every Dependabot PR against this file.
+litellm[proxy]==1.83.14
