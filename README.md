@@ -26,7 +26,7 @@ docker run --rm \
   -e OPENAI_API_KEY=sk-your-openai-key \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.83.14
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.85.1
 ```
 
 Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
@@ -73,7 +73,7 @@ The `linux/arm64` build runs the `prisma generate` step under qemu emulation if 
 cosign verify \
   --certificate-identity-regexp 'https://github.com/aialchemylabs/aialchemy-llm-gateway/.github/workflows/image.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.83.14
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.85.1
 ```
 
 The CI workflow signs every published image and SBOM, and scans both architectures' layers for secret-shaped strings before the build is allowed to succeed.
