@@ -26,10 +26,24 @@ docker run --rm \
   -e OPENAI_API_KEY=sk-your-openai-key \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.85.1
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.88.1
 ```
 
 Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
+
+### Gemini 3.5 Flash routing
+
+The image can route Gemini 3.5 Flash through LiteLLM when the runtime-mounted `config.yaml` includes the model and the container has `GEMINI_API_KEY` set:
+
+```yaml
+model_list:
+  - model_name: gemini/gemini-3.5-flash
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+For long-context compression workloads, prefer this stable model name when it is available from Google AI Studio. `gemini/gemini-3-flash-preview` can remain as a fallback for environments that have not yet enabled the stable 3.5 route.
 
 ### Recommended env vars
 
@@ -73,7 +87,7 @@ The `linux/arm64` build runs the `prisma generate` step under qemu emulation if 
 cosign verify \
   --certificate-identity-regexp 'https://github.com/aialchemylabs/aialchemy-llm-gateway/.github/workflows/image.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.85.1
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.88.1
 ```
 
 The CI workflow signs every published image and SBOM, and scans both architectures' layers for secret-shaped strings before the build is allowed to succeed.

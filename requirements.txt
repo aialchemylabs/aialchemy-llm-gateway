@@ -1,9 +1,9 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.85.1 (latest upstream stable Docker/PyPI line as of 2026-05-21).
+# Chosen: 1.88.1 (latest upstream stable Docker/PyPI line as of 2026-06-10).
 # Rationale: tracks upstream stable for latest fixes while keeping this image
 # aligned with the official LiteLLM release cadence.
 # Revisit on every Dependabot PR against this file.
-litellm[proxy]==1.85.1
+litellm[proxy]==1.88.1
 
 # OpenTelemetry — required when litellm_settings.callbacks: ["otel"] is set.
 # LiteLLM imports from opentelemetry.sdk and the OTLP HTTP exporter; the
