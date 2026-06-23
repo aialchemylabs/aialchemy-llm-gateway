@@ -26,10 +26,16 @@ docker run --rm \
   -e OPENAI_API_KEY=sk-your-openai-key \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.88.1
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.89.3
 ```
 
 Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
+
+## Runtime model support
+
+This image does not bake in a provider config. The runtime-mounted `config.yaml` is the source of truth for which models a running gateway exposes, and a provider is live-working only when its config entry, credentials, and upstream service are all present.
+
+For the AI Alchemy local stack, the mounted config lives in `core-infra/llm-gateway-config.yml`; keep the actual provider/model report there rather than copying LiteLLM's full upstream catalog into this image repo.
 
 ### Gemini 3.5 Flash routing
 
@@ -87,7 +93,7 @@ The `linux/arm64` build runs the `prisma generate` step under qemu emulation if 
 cosign verify \
   --certificate-identity-regexp 'https://github.com/aialchemylabs/aialchemy-llm-gateway/.github/workflows/image.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.88.1
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.89.3
 ```
 
 The CI workflow signs every published image and SBOM, and scans both architectures' layers for secret-shaped strings before the build is allowed to succeed.
