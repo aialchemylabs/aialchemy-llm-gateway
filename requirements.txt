@@ -14,7 +14,7 @@ litellm[proxy]==1.89.3
 # 1.31.x is the lowest line whose importlib-metadata range is compatible
 # with litellm's pin (>=8.5.0) — earlier 1.27/1.28 conflict.
 opentelemetry-api==1.31.1
-opentelemetry-sdk==1.31.1
+opentelemetry-sdk==1.43.0
 opentelemetry-exporter-otlp-proto-http==1.31.1
 
 # Prisma client — required when DATABASE_URL is set so LiteLLM can
