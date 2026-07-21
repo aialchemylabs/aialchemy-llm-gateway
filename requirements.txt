@@ -1,10 +1,10 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.92.0 (latest official GitHub/PyPI stable release
-# as of 2026-07-18; released 2026-07-12).
+# Chosen: 1.93.0 (latest official GitHub/PyPI stable release
+# as of 2026-07-22; released 2026-07-19).
 # Rationale: tracks upstream stable for latest fixes while keeping this image
 # aligned with the official LiteLLM release cadence.
 # Revisit on every Dependabot PR against this file.
-litellm[proxy]==1.92.0
+litellm[proxy]==1.93.0
 
 # OpenTelemetry — required when litellm_settings.callbacks: ["otel"] is set.
 # LiteLLM imports from opentelemetry.sdk and the OTLP HTTP exporter; the
