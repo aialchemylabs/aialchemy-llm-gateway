@@ -1,19 +1,21 @@
 # AI Alchemy LLM Gateway
 
-A multi-arch Docker image that wraps `litellm[proxy]` with the runtime dependencies needed for the proxy's tracing and database-backed features to work out of the box. Published to GitHub Container Registry under our org namespace.
+A multi-arch Docker image that wraps `litellm[proxy]` with the runtime dependencies needed for the proxy's metrics, tracing, and database-backed features to work out of the box. Published to GitHub Container Registry under our org namespace.
 
 ## Why this image exists
 
-`pip install litellm[proxy]` installs LiteLLM but not the dependencies its callbacks reach for at runtime. Two specific gaps:
+`pip install litellm[proxy]` installs LiteLLM but not every dependency its callbacks reach for at runtime. Three specific gaps:
 
 - `litellm_settings.callbacks: ["otel"]` raises `ModuleNotFoundError: No module named 'opentelemetry'` — the `[proxy]` extra does not pull `opentelemetry-api` / `sdk` / OTLP exporter.
+- `litellm_settings.callbacks: ["prometheus"]` raises `ModuleNotFoundError: No module named 'prometheus_client'` — the `[proxy]` extra does not pull the Prometheus client.
 - `DATABASE_URL=<postgres>` raises `ModuleNotFoundError: No module named 'prisma'` and, even with the Python client installed, fails with "Unable to find Prisma binaries. Please run 'prisma generate' first." — `[proxy]` does not pull `prisma`, the Prisma CLI is a Node binary, and the engine binaries need to be generated against LiteLLM's bundled `schema.prisma`.
 
 This image takes the upstream `litellm[proxy]` release and adds:
 
 - `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` (1.31.x line, the lowest line whose `importlib-metadata` range coexists with LiteLLM's pin).
+- `prometheus-client==0.20.0` for LiteLLM's authenticated `/metrics` endpoint and spend/key/team/budget series.
 - `prisma==0.11.0` plus `nodejs` + `libatomic1` in the runtime image, with `prisma generate --schema=<litellm>/proxy/schema.prisma` baked into a build step so engine binaries ship in the image (no first-start CDN download).
-- A build-time smoke import of `litellm.proxy.proxy_server` to catch upstream-extra regressions before the image is published.
+- Build-time smoke imports of `litellm.proxy.proxy_server` and `prometheus_client` to catch upstream-extra and callback regressions before the image is published.
 - Cosign-signed image provenance and a multi-arch (`linux/amd64`, `linux/arm64`) build.
 
 The LiteLLM proxy itself is unmodified — same source release as `pip install litellm[proxy]==X.Y.Z`. Provider configuration, model routing, and feature flags are entirely upstream's surface. See [LiteLLM's docs](https://docs.litellm.ai/docs/proxy/configs) for `config.yaml` details.
@@ -111,7 +113,7 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 ```
 .
 ├── Dockerfile                 # python:3.13-slim + uv + nodejs + prisma generate + healthcheck
-├── requirements.txt           # litellm[proxy], opentelemetry-*, prisma — all pinned
+├── requirements.txt           # litellm[proxy], prometheus, otel, prisma — pinned
 ├── .github/workflows/image.yml # CI: build, sign with cosign, secret-scan, publish
 ├── LICENSE                    # Apache 2.0
 ├── NOTICE                     # Attribution to upstream LiteLLM
@@ -120,6 +122,6 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 
 ## Attribution and non-affiliation
 
-This image bundles the upstream `litellm[proxy]` release with a small set of additional runtime dependencies (`opentelemetry-*`, `prisma`, `nodejs`) so the proxy's tracing and database features work out of the box. The LiteLLM source itself is unmodified.
+This image bundles the upstream `litellm[proxy]` release with a small set of additional runtime dependencies (`prometheus-client`, `opentelemetry-*`, `prisma`, `nodejs`) so the proxy's metrics, tracing, and database features work out of the box. The LiteLLM source itself is unmodified.
 
 LiteLLM is a trademark of BerriAI; this project is not affiliated with or endorsed by BerriAI. See `NOTICE` for full attribution.

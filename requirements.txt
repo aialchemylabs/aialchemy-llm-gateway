@@ -6,6 +6,12 @@
 # Revisit on every Dependabot PR against this file.
 litellm[proxy]==1.93.0
 
+# Prometheus callback — required when
+# litellm_settings.callbacks includes "prometheus". LiteLLM's [proxy] extra
+# does not install the client library even though the callback imports it at
+# startup. This is the version required by LiteLLM's official proxy docs.
+prometheus-client==0.20.0
+
 # OpenTelemetry — required when litellm_settings.callbacks: ["otel"] is set.
 # LiteLLM imports from opentelemetry.sdk and the OTLP HTTP exporter; the
 # `[proxy]` extra does not pull these in, so we add them explicitly.

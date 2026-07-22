@@ -36,9 +36,9 @@ ENV UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
-# Smoke import at build time. Catches the "upstream silently drops [proxy]"
-# failure mode called out in Requirements §Open questions.
-RUN python -c "import litellm.proxy.proxy_server"
+# Smoke imports at build time. This catches upstream-extra regressions and
+# verifies the callback dependency that LiteLLM imports only at proxy startup.
+RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
 
 # Generate the Prisma client + engine binaries against the schema.prisma
 # that ships inside the litellm package. Doing this at build time means
