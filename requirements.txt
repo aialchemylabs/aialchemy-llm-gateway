@@ -1,10 +1,10 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.93.0 (latest official GitHub/PyPI stable release
-# as of 2026-07-22; released 2026-07-19).
+# Chosen: 1.95.0 (latest official GitHub/PyPI stable release
+# as of 2026-08-09; released 2026-08-03).
 # Rationale: tracks upstream stable for latest fixes while keeping this image
 # aligned with the official LiteLLM release cadence.
 # Revisit on every Dependabot PR against this file.
-litellm[proxy]==1.93.0
+litellm[proxy]==1.95.0
 
 # Prometheus callback — required when
 # litellm_settings.callbacks includes "prometheus". LiteLLM's [proxy] extra
