@@ -6,6 +6,17 @@
 # Revisit on every Dependabot PR against this file.
 litellm[proxy]==1.95.0
 
+# FastAPI — pinned to work around an upstream LiteLLM bug, NOT a preference.
+# LiteLLM 1.95.0 added litellm/proxy/management_endpoints/management_v1/
+# common.py, which does `from fastapi.dependencies.utils import
+# get_flat_dependant`. FastAPI removed that symbol in 0.141.0, but LiteLLM's
+# own constraint is still the loose `fastapi>=0.136.3,<1.0`, so a fresh
+# resolve picks 0.141.x and `import litellm.proxy.proxy_server` dies with
+# ImportError at container start. 0.140.1 is the last release that exports it.
+# Tracked upstream as BerriAI/litellm#35763 (open; still present in
+# 1.96.0-rc.1). Drop this pin once that issue is fixed and released.
+fastapi==0.140.1
+
 # Prometheus callback — required when
 # litellm_settings.callbacks includes "prometheus". LiteLLM's [proxy] extra
 # does not install the client library even though the callback imports it at
