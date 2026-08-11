@@ -39,4 +39,4 @@ opentelemetry-exporter-otlp-proto-http==1.31.1
 # admin-UI auth. The `[proxy]` extra does NOT pull this. The Dockerfile
 # additionally runs `prisma generate` against LiteLLM's schema.prisma to
 # bake the engine binaries into the image.
-prisma==0.11.0
+prisma==0.15.0
