@@ -36,6 +36,53 @@ ENV UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
+# LiteLLM 1.95.0's Responses health probe passes a bare string to
+# `aresponses`, while the ChatGPT subscription adapter requires canonical
+# list input. Apply a fail-closed source patch until upstream ships the fix.
+COPY scripts/patch_litellm_health_check.py /tmp/patch_litellm_health_check.py
+RUN python /tmp/patch_litellm_health_check.py \
+ && rm /tmp/patch_litellm_health_check.py
+
+# LiteLLM 1.95.0 dispatches Anthropic Messages requests to the ChatGPT
+# subscription provider without first entering its completion-to-Responses
+# bridge. That sends Claude Code's system prompt as an unsupported system-role
+# input item. Force ChatGPT completion calls through the existing bridge, which
+# preserves the prompt in the Responses `instructions` field.
+COPY scripts/patch_litellm_chatgpt_responses_bridge.py /tmp/patch_litellm_chatgpt_responses_bridge.py
+RUN python /tmp/patch_litellm_chatgpt_responses_bridge.py \
+ && rm /tmp/patch_litellm_chatgpt_responses_bridge.py
+
+# Claude Code sends its system prompt as structured text blocks. LiteLLM's
+# generic bridge keeps structured system content as a system-role Responses
+# input item, which the ChatGPT subscription backend rejects. Move text-only
+# structured system blocks into `instructions` in the ChatGPT provider only.
+COPY scripts/patch_litellm_chatgpt_structured_system.py /tmp/patch_litellm_chatgpt_structured_system.py
+RUN python /tmp/patch_litellm_chatgpt_structured_system.py \
+ && rm /tmp/patch_litellm_chatgpt_structured_system.py
+
+# The ChatGPT subscription Responses endpoint is SSE-only. LiteLLM's generic
+# fake-stream heuristic strips the provider's forced `stream: true` for newly
+# released model names it does not recognize. Disable fake streaming for this
+# provider so chatgpt/* automatically works with future subscription models.
+COPY scripts/patch_litellm_chatgpt_native_stream.py /tmp/patch_litellm_chatgpt_native_stream.py
+RUN python /tmp/patch_litellm_chatgpt_native_stream.py \
+ && rm /tmp/patch_litellm_chatgpt_native_stream.py
+
+# Dynamic chatgpt/* routes can lead LiteLLM's static capability lookup to
+# silently reduce xhigh/max effort to high. Preserve the explicit client value
+# and let the subscription backend validate support for each model.
+COPY scripts/patch_litellm_chatgpt_reasoning_effort.py /tmp/patch_litellm_chatgpt_reasoning_effort.py
+RUN python /tmp/patch_litellm_chatgpt_reasoning_effort.py \
+ && rm /tmp/patch_litellm_chatgpt_reasoning_effort.py
+
+# Lock the provider-specific streaming contract into the image build. ChatGPT
+# subscription requests must keep native SSE and explicit xhigh effort even for
+# model names newer than LiteLLM's registry; Gemini streaming must use
+# streamGenerateContent + SSE.
+COPY scripts/verify_litellm_streaming_contract.py /tmp/verify_litellm_streaming_contract.py
+RUN python /tmp/verify_litellm_streaming_contract.py \
+ && rm /tmp/verify_litellm_streaming_contract.py
+
 # Smoke imports at build time. This catches upstream-extra regressions and
 # verifies the callback dependency that LiteLLM imports only at proxy startup.
 RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"

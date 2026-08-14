@@ -16,9 +16,12 @@ This image takes the upstream `litellm[proxy]` release and adds:
 - `prometheus-client==0.20.0` for LiteLLM's authenticated `/metrics` endpoint and spend/key/team/budget series.
 - `prisma==0.11.0` plus `nodejs` + `libatomic1` in the runtime image, with `prisma generate --schema=<litellm>/proxy/schema.prisma` baked into a build step so engine binaries ship in the image (no first-start CDN download).
 - Build-time smoke imports of `litellm.proxy.proxy_server` and `prometheus_client` to catch upstream-extra and callback regressions before the image is published.
+- A narrow, fail-closed LiteLLM 1.95.0 compatibility patch that sends Responses health probes as a one-item input list. This keeps working ChatGPT subscription routes from being reported unhealthy by the Admin UI.
+- Four fail-closed Claude Code compatibility patches for the ChatGPT subscription provider: completion-shaped calls enter LiteLLM's existing Responses bridge, text-only structured system blocks become Responses `instructions`, LiteLLM's fake-stream fallback is disabled for this SSE-only provider, and explicit `xhigh`/`max` reasoning effort is preserved on dynamic model names. Together these preserve Claude Code's system prompt, keep `stream: true`, and prevent silent effort downgrades on new `chatgpt/*` model names that are not yet present in LiteLLM's model registry. Remove each patch when the pinned upstream release contains equivalent behavior.
+- A build-time streaming contract check proving that ChatGPT subscription requests retain native SSE and `xhigh` effort, while Gemini streaming resolves to Google's `streamGenerateContent?alt=sse` transport.
 - Cosign-signed image provenance and a multi-arch (`linux/amd64`, `linux/arm64`) build.
 
-The LiteLLM proxy itself is unmodified — same source release as `pip install litellm[proxy]==X.Y.Z`. Provider configuration, model routing, and feature flags are entirely upstream's surface. See [LiteLLM's docs](https://docs.litellm.ai/docs/proxy/configs) for `config.yaml` details.
+Except for the documented compatibility patches, the LiteLLM proxy is the same source release as `pip install litellm[proxy]==X.Y.Z`. Provider configuration, model routing, and feature flags remain upstream's surface. See [LiteLLM's docs](https://docs.litellm.ai/docs/proxy/configs) for `config.yaml` details.
 
 ## Pull and run
 
@@ -28,7 +31,7 @@ docker run --rm \
   -e OPENAI_API_KEY=sk-your-openai-key \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.93.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.95.0
 ```
 
 Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
@@ -39,19 +42,19 @@ This image does not bake in a provider config. The runtime-mounted `config.yaml`
 
 For the AI Alchemy local stack, the mounted config lives in `core-infra/llm-gateway-config.yml`; keep the actual provider/model report there rather than copying LiteLLM's full upstream catalog into this image repo.
 
-### Gemini 3.5 Flash routing
+### Gemini routing and streaming
 
-The image can route Gemini 3.5 Flash through LiteLLM when the runtime-mounted `config.yaml` includes the model and the container has `GEMINI_API_KEY` set:
+The image routes an exact Gemini model through LiteLLM when the runtime-mounted `config.yaml` includes that model or a `gemini/*` wildcard and the container has `GEMINI_API_KEY` set:
 
 ```yaml
 model_list:
-  - model_name: gemini/gemini-3.5-flash
+  - model_name: gemini/*
     litellm_params:
-      model: gemini/gemini-3.5-flash
+      model: gemini/*
       api_key: os.environ/GEMINI_API_KEY
 ```
 
-For long-context compression workloads, prefer this stable model name when it is available from Google AI Studio. `gemini/gemini-3-flash-preview` can remain as a fallback for environments that have not yet enabled the stable 3.5 route.
+When a client requests streaming, LiteLLM maps the request to Google's `streamGenerateContent?alt=sse` transport. The image build verifies this mapping with `gemini-3.6-flash`; the runtime config and Google project remain authoritative for which exact model IDs are available.
 
 ### Recommended env vars
 
@@ -95,7 +98,7 @@ The `linux/arm64` build runs the `prisma generate` step under qemu emulation if 
 cosign verify \
   --certificate-identity-regexp 'https://github.com/aialchemylabs/aialchemy-llm-gateway/.github/workflows/image.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.93.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.95.0
 ```
 
 The CI workflow signs every published image and SBOM, and scans both architectures' layers for secret-shaped strings before the build is allowed to succeed.
@@ -122,6 +125,6 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 
 ## Attribution and non-affiliation
 
-This image bundles the upstream `litellm[proxy]` release with a small set of additional runtime dependencies (`prometheus-client`, `opentelemetry-*`, `prisma`, `nodejs`) so the proxy's metrics, tracing, and database features work out of the box. The LiteLLM source itself is unmodified.
+This image bundles the upstream `litellm[proxy]` release with a small set of additional runtime dependencies (`prometheus-client`, `opentelemetry-*`, `prisma`, `nodejs`) so the proxy's metrics, tracing, and database features work out of the box. The narrow, fail-closed compatibility patches applied to the pinned LiteLLM source are documented above and in the Dockerfile.
 
 LiteLLM is a trademark of BerriAI; this project is not affiliated with or endorsed by BerriAI. See `NOTICE` for full attribution.
