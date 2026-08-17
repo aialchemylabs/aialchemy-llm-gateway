@@ -1,112 +1,135 @@
 """Tests for AiAlchemyPiiOutputGuard.
 
-Verifies PII is masked in final provider responses before the user receives them,
-and that errors fail closed (releasing no partial text).
+The output guard is stateless per request and Presidio-only — per spec §4.4
+Prompt Guard must never inspect a final provider answer. On any failure it
+raises so no partial text is released.
 """
-from __future__ import annotations
-
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+
+# Mock litellm before importing the guard.
+import tests.conftest_guardrails  # noqa: F401
+
+from guardrails.pii_output_guard import AiAlchemyPiiOutputGuard
+from guardrails.presidio_client import PresidioError
 
 
-GUARD_MODULE = "guardrails.pii_output_guard"
+def run(coro):
+    return asyncio.run(coro)
 
 
-def run_async(coro):
-    """Helper to run async test methods."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+class TestPiiOutputGuard(unittest.TestCase):
+    def setUp(self):
+        self.guard = AiAlchemyPiiOutputGuard()
+        self.guard._presidio = AsyncMock()
 
+    def test_masks_response_texts(self):
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            return_value="Reach <EMAIL_ADDRESS>"
+        )
+        inputs = {"texts": ["Reach john@example.com"]}
 
-class PiiOutputGuardTests(unittest.TestCase):
-    """Unit tests for AiAlchemyPiiOutputGuard (aialchemy-pii-output-v1)."""
-
-    def _get_module(self):
-        import importlib
-
-        return importlib.import_module(GUARD_MODULE)
-
-    def _make_guard(self):
-        """Create a PiiOutputGuard instance."""
-        mod = self._get_module()
-        return mod.AiAlchemyPiiOutputGuard()
-
-    def _make_response_data(self, text: str) -> dict:
-        """Build a minimal provider response structure."""
-        return {
-            "output": [
-                {"type": "message", "content": [{"type": "text", "text": text}]}
-            ]
-        }
-
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_masks_pii_in_response_text(self, mock_anonymize) -> None:
-        """PII in the provider's final response text is masked before the user receives it."""
-        masked_text = "The account belongs to <PERSON> at <EMAIL_ADDRESS>."
-
-        async def mock_anon(text):
-            return {"text": masked_text}
-
-        mock_anonymize.side_effect = lambda text: mock_anon(text)
-
-        guard = self._make_guard()
-        response_data = self._make_response_data(
-            "The account belongs to Jane Smith at jane.smith@corp.com."
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="response"
+            )
         )
 
-        async def _test():
-            result = await guard.inspect(response_data)
-            self.assertEqual(result.action, "ALLOW")
-            # Verify the response text was rewritten
-            output_items = response_data["output"]
-            text_content = output_items[0]["content"][0]["text"]
-            self.assertEqual(text_content, masked_text)
-            self.assertNotIn("Jane Smith", text_content)
-            self.assertNotIn("jane.smith@corp.com", text_content)
+        self.assertEqual(result["texts"], ["Reach <EMAIL_ADDRESS>"])
 
-        run_async(_test())
+    def test_preserves_order_and_cardinality(self):
+        async def fake(text):
+            return f"masked:{text}"
 
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_error_blocks_response(self, mock_anonymize) -> None:
-        """A Presidio error causes the output guard to fail closed -- no partial text released."""
-        from guardrails.presidio_client import PresidioError
+        self.guard._presidio.analyze_and_anonymize = fake
+        inputs = {"texts": ["one", "two"]}
 
-        mock_anonymize.side_effect = PresidioError("Anonymizer crashed")
-
-        guard = self._make_guard()
-        response_data = self._make_response_data(
-            "The patient record for John Smith shows TFN 123456789."
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="response"
+            )
         )
 
-        async def _test():
-            result = await guard.inspect(response_data)
-            self.assertEqual(result.action, "BLOCK")
-            # No partial text should be released to the user -- the guard
-            # must not forward the original unmasked response
+        self.assertEqual(result["texts"], ["masked:one", "masked:two"])
 
-        run_async(_test())
+    def test_empty_string_preserved(self):
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="x")
+        inputs = {"texts": ["", "real"]}
 
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_no_pii_passes_through(self, mock_anonymize) -> None:
-        """Response text with no PII passes through unchanged."""
-        original_text = "The current temperature in Sydney is 24 degrees Celsius."
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="response"
+            )
+        )
 
-        async def mock_anon(text):
-            return {"text": text}
+        self.assertEqual(result["texts"][0], "")
 
-        mock_anonymize.side_effect = lambda text: mock_anon(text)
+    def test_error_blocks_and_releases_nothing(self):
+        """A Presidio failure raises — no partially masked list is returned."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            side_effect=PresidioError("timeout")
+        )
+        inputs = {"texts": ["contains john@example.com"]}
 
-        guard = self._make_guard()
-        response_data = self._make_response_data(original_text)
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs=inputs, request_data={}, input_type="response"
+                )
+            )
 
-        async def _test():
-            result = await guard.inspect(response_data)
-            self.assertEqual(result.action, "ALLOW")
-            output_items = response_data["output"]
-            text_content = output_items[0]["content"][0]["text"]
-            self.assertEqual(text_content, original_text)
+        message = str(ctx.exception)
+        self.assertIn("blocked", message)
+        # The original text was never swapped into the returned structure.
+        self.assertEqual(inputs["texts"], ["contains john@example.com"])
 
-        run_async(_test())
+    def test_request_type_is_passthrough(self):
+        """The output guard ignores requests — the input guard owns those."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="nope")
+        inputs = {"texts": ["prompt text"]}
+
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="request"
+            )
+        )
+
+        self.assertEqual(result, inputs)
+        self.guard._presidio.analyze_and_anonymize.assert_not_called()
+
+    def test_no_texts_is_not_an_error(self):
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="x")
+        inputs = {"texts": []}
+
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="response"
+            )
+        )
+
+        self.assertEqual(result["texts"], [])
+
+    def test_guard_is_stateless_across_calls(self):
+        """No buffer state may leak between requests."""
+        async def fake(text):
+            return f"masked:{text}"
+
+        self.guard._presidio.analyze_and_anonymize = fake
+
+        first = run(
+            self.guard.apply_guardrail(
+                inputs={"texts": ["a"]}, request_data={}, input_type="response"
+            )
+        )
+        second = run(
+            self.guard.apply_guardrail(
+                inputs={"texts": ["b"]}, request_data={}, input_type="response"
+            )
+        )
+
+        self.assertEqual(first["texts"], ["masked:a"])
+        self.assertEqual(second["texts"], ["masked:b"])
 
 
 if __name__ == "__main__":

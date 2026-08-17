@@ -85,14 +85,37 @@ RUN python /tmp/verify_litellm_streaming_contract.py \
 
 # Smoke imports at build time. This catches upstream-extra regressions and
 # verifies the callback dependency that LiteLLM imports at proxy startup.
-# Also verifies the guardrail package imports correctly with all deps.
 RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
 
-# Copy the AiAlchemy guardrails package into the image.
+# Copy the AiAlchemy guardrails package and its tests into the image.
 COPY guardrails/ /app/guardrails/
+COPY tests/ /app/tests/
 
-# Smoke test: verify the guardrail modules load correctly and Prompt Guard
-# model infrastructure is importable (model weights are downloaded at runtime).
+# Verify the Responses guardrail patch can bind to the pinned LiteLLM.
+#
+# LiteLLM 1.97.0 skips guardrail invocation for Responses continuations that
+# contain only function_call / function_call_output, because its text extraction
+# finds nothing to inspect. That is the bypass must-have-requirements.md §4.3
+# prohibits. This step fails the build if the handler class or method we wrap is
+# absent, so an image whose tool-result path is unguarded is never published.
+RUN python -m guardrails.litellm_responses_patch
+
+# Activate the patch for every interpreter in this image. sitecustomize is
+# imported automatically at startup, so the wrapper is installed before the
+# proxy serves its first request — no reliance on guard-module import order.
+RUN SITE_DIR="$(python -c 'import site; print(site.getsitepackages()[0])')" \
+ && printf '%s\n' \
+      'try:' \
+      '    from guardrails.litellm_responses_patch import apply_patch' \
+      '    apply_patch()' \
+      'except Exception as exc:  # fail loudly, never silently unguarded' \
+      '    raise RuntimeError(' \
+      '        "AiAlchemy Responses guardrail patch failed to apply: %r" % (exc,)' \
+      '    )' \
+    > "$SITE_DIR/sitecustomize.py" \
+ && python -c "import sitecustomize; print('sitecustomize: responses guardrail patch active')"
+
+# Guardrail module smoke import — proves every guard and its deps resolve.
 RUN python -c "\
 from guardrails.config import WEB_TOOL_ALLOWLIST, PRESIDIO_ENTITIES; \
 from guardrails.presidio_client import PresidioClient, PresidioError; \
@@ -101,10 +124,17 @@ from guardrails.prompt_guard_client import PromptGuardClient, PromptGuardError; 
 from guardrails.pii_input_guard import AiAlchemyPiiInputGuard; \
 from guardrails.web_tool_result_guard import AiAlchemyWebToolResultGuard; \
 from guardrails.pii_output_guard import AiAlchemyPiiOutputGuard; \
+from guardrails.stream_reject_guard import AiAlchemyStreamRejectGuard; \
 print('guardrails: all modules imported successfully'); \
 print(f'  web-tool allowlist: {sorted(WEB_TOOL_ALLOWLIST)}'); \
 print(f'  presidio entities: {len(PRESIDIO_ENTITIES)} configured'); \
 "
+
+# EXECUTE the behavioural test suite. Importing the modules is not evidence —
+# these tests are what prove the fail-closed contracts (PII masking reaches the
+# provider, tool-only continuations are inspected, malformed classifier output
+# blocks, streaming is rejected). A failure here fails the build.
+RUN python -m unittest discover -s tests -p 'test_*.py' -t . -v
 
 # Generate the Prisma client + engine binaries against the schema.prisma
 # that ships inside the litellm package. Doing this at build time means

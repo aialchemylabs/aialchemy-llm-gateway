@@ -120,13 +120,15 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 ├── guardrails/                # AiAlchemy custom LiteLLM guardrails (aialchemy-global-baseline-v1)
 │   ├── config.py              # Version-controlled thresholds, allowlists, entity lists
 │   ├── presidio_client.py     # Async HTTP client for self-hosted Presidio services
-│   ├── prompt_guard.py        # Prompt Guard 2 86M chunking and classification
-│   ├── prompt_guard_client.py # Lightweight async wrapper for in-process inference
+│   ├── prompt_guard.py        # Prompt Guard 2 86M token chunking and classification
+│   ├── prompt_guard_client.py # Fail-closed async inference wrapper (binary labels)
 │   ├── pii_input_guard.py     # Step 1: mask PII in provider-bound content
 │   ├── web_tool_result_guard.py # Step 2: inspect untrusted web-tool results
-│   └── pii_output_guard.py    # Step 3: mask PII in final user-visible responses
+│   ├── pii_output_guard.py    # Step 3: mask PII in final user-visible responses
+│   ├── stream_reject_guard.py # Reject client streaming on the protected route
+│   └── litellm_responses_patch.py # Guarantee guardrail invocation for tool-only continuations
 ├── scripts/                   # Build-time source patches and contract verifications
-├── tests/                     # Unit tests (config + presidio run locally; guards run in Docker)
+├── tests/                     # Behavioural test suite — executed in the image build
 ├── docs/                      # License obligations and design documents
 ├── .github/workflows/image.yml # CI: build, sign with cosign, secret-scan, publish
 ├── LICENSE                    # Apache 2.0

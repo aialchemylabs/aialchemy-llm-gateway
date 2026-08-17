@@ -14,6 +14,7 @@ import importlib as _importlib
 __all__ = [
     "AiAlchemyPiiInputGuard",
     "AiAlchemyPiiOutputGuard",
+    "AiAlchemyStreamRejectGuard",
     "AiAlchemyWebToolResultGuard",
 ]
 
@@ -21,6 +22,7 @@ __all__ = [
 _LAZY_GUARD_CLASSES = {
     "AiAlchemyPiiInputGuard": "guardrails.pii_input_guard",
     "AiAlchemyPiiOutputGuard": "guardrails.pii_output_guard",
+    "AiAlchemyStreamRejectGuard": "guardrails.stream_reject_guard",
     "AiAlchemyWebToolResultGuard": "guardrails.web_tool_result_guard",
 }
 

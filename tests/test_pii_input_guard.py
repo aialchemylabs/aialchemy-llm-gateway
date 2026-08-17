@@ -1,141 +1,201 @@
 """Tests for AiAlchemyPiiInputGuard.
 
-Verifies PII is masked in user messages and Responses API input before
-the provider call, and that errors fail closed (block the request).
+Proves the guard works through LiteLLM's inputs['texts'] return path — the
+mechanism that actually survives LiteLLM's write-back — plus raw mutation of
+the fields LiteLLM never extracts (instructions, function_call_output.output).
 """
-from __future__ import annotations
-
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+
+# Mock litellm before importing the guard.
+import tests.conftest_guardrails  # noqa: F401
+
+from guardrails.pii_input_guard import AiAlchemyPiiInputGuard
+from guardrails.presidio_client import PresidioError
 
 
-GUARD_MODULE = "guardrails.pii_input_guard"
+def run(coro):
+    return asyncio.run(coro)
 
 
-def run_async(coro):
-    """Helper to run async test methods."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+class TestPiiInputGuardTextsPath(unittest.TestCase):
+    """inputs['texts'] is the authoritative channel LiteLLM writes back."""
+
+    def setUp(self):
+        self.guard = AiAlchemyPiiInputGuard()
+        self.guard._presidio = AsyncMock()
+
+    def test_returns_transformed_texts(self):
+        """Masked text is returned in inputs['texts'], not just mutated in request_data."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            return_value="Hello <PERSON>"
+        )
+        inputs = {"texts": ["Hello John Smith"]}
+
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs,
+                request_data={"input": [{"role": "user", "content": "Hello John Smith"}]},
+                input_type="request",
+            )
+        )
+
+        self.assertEqual(result["texts"], ["Hello <PERSON>"])
+
+    def test_preserves_order_and_cardinality(self):
+        """Returned texts keep exact input order and length."""
+        async def fake(text):
+            return f"masked:{text}"
+
+        self.guard._presidio.analyze_and_anonymize = fake
+        inputs = {"texts": ["first", "second", "third"]}
+
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="request"
+            )
+        )
+
+        self.assertEqual(
+            result["texts"], ["masked:first", "masked:second", "masked:third"]
+        )
+        self.assertEqual(len(result["texts"]), 3)
+
+    def test_empty_texts_is_not_an_error(self):
+        """A tool-only continuation has no extracted texts — that must not raise."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="x")
+        inputs = {"texts": []}
+
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="request"
+            )
+        )
+
+        self.assertEqual(result["texts"], [])
 
 
-class PiiInputGuardTests(unittest.TestCase):
-    """Unit tests for AiAlchemyPiiInputGuard (aialchemy-pii-input-v1)."""
+class TestPiiInputGuardRawFields(unittest.TestCase):
+    """Fields LiteLLM does not extract are mutated on request_data directly."""
 
-    def _get_module(self):
-        import importlib
+    def setUp(self):
+        self.guard = AiAlchemyPiiInputGuard()
+        self.guard._presidio = AsyncMock()
 
-        return importlib.import_module(GUARD_MODULE)
+    def test_masks_instructions(self):
+        """The Responses `instructions` field is masked."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            return_value="Contact <EMAIL_ADDRESS>"
+        )
+        request_data = {"instructions": "Contact john@example.com"}
 
-    def _make_guard(self):
-        """Create a PiiInputGuard instance."""
-        mod = self._get_module()
-        return mod.AiAlchemyPiiInputGuard()
+        run(
+            self.guard.apply_guardrail(
+                inputs={"texts": []}, request_data=request_data, input_type="request"
+            )
+        )
 
-    def _make_chat_request(self, user_message: str) -> dict:
-        """Build a minimal chat/Responses request with a user message."""
-        return {
+        self.assertEqual(request_data["instructions"], "Contact <EMAIL_ADDRESS>")
+
+    def test_masks_function_call_output(self):
+        """function_call_output.output is masked via raw mutation.
+
+        LiteLLM never extracts this field into texts, so the guard must reach it
+        through request_data or the PII would reach the provider unmasked.
+        """
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            return_value="mail <EMAIL_ADDRESS>"
+        )
+        request_data = {
             "input": [
-                {"role": "user", "content": user_message},
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": "mail secret@example.com",
+                }
             ]
         }
 
-    def _make_responses_request(self, items: list) -> dict:
-        """Build a Responses API request with arbitrary input items."""
-        return {"input": items}
-
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_masks_pii_in_user_message(self, mock_anonymize) -> None:
-        """PII in a user message is masked before forwarding to the provider."""
-        masked_text = "My name is <PERSON> and my email is <EMAIL_ADDRESS>."
-
-        async def mock_anon(text):
-            return {"text": masked_text}
-
-        mock_anonymize.side_effect = lambda text: mock_anon(text)
-
-        guard = self._make_guard()
-        request_data = self._make_chat_request(
-            "My name is John Doe and my email is john@example.com."
+        run(
+            self.guard.apply_guardrail(
+                inputs={"texts": []}, request_data=request_data, input_type="request"
+            )
         )
 
-        async def _test():
-            result = await guard.inspect(request_data)
-            self.assertEqual(result.action, "ALLOW")
-            # The user message should be rewritten with masked PII
-            user_items = [
-                item for item in request_data["input"]
-                if item.get("role") == "user"
+        self.assertEqual(
+            request_data["input"][0]["output"], "mail <EMAIL_ADDRESS>"
+        )
+
+    def test_non_string_function_call_output_untouched(self):
+        """Structured output is left for the web-tool guard to adjudicate."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="nope")
+        structured = [{"type": "image", "data": "..."}]
+        request_data = {
+            "input": [
+                {"type": "function_call_output", "call_id": "c1", "output": structured}
             ]
-            self.assertEqual(user_items[0]["content"], masked_text)
+        }
 
-        run_async(_test())
+        run(
+            self.guard.apply_guardrail(
+                inputs={"texts": []}, request_data=request_data, input_type="request"
+            )
+        )
 
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_masks_pii_in_responses_api_input(self, mock_anonymize) -> None:
-        """PII in Responses API structured input items is masked."""
-        masked_text = "Contact <PERSON> at <PHONE_NUMBER>"
+        self.assertEqual(request_data["input"][0]["output"], structured)
 
-        async def mock_anon(text):
-            return {"text": masked_text}
 
-        mock_anonymize.side_effect = lambda text: mock_anon(text)
+class TestPiiInputGuardFailClosed(unittest.TestCase):
+    def setUp(self):
+        self.guard = AiAlchemyPiiInputGuard()
+        self.guard._presidio = AsyncMock()
 
-        guard = self._make_guard()
-        request_data = self._make_responses_request([
-            {"role": "user", "content": "Contact Alice at 0412-345-678"},
-        ])
+    def test_presidio_error_blocks_request(self):
+        """Any Presidio failure blocks — never forwards unmasked content."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            side_effect=PresidioError("connection refused")
+        )
 
-        async def _test():
-            result = await guard.inspect(request_data)
-            self.assertEqual(result.action, "ALLOW")
-            user_items = [
-                item for item in request_data["input"]
-                if item.get("role") == "user"
-            ]
-            self.assertEqual(user_items[0]["content"], masked_text)
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs={"texts": ["Hello John Smith"]},
+                    request_data={},
+                    input_type="request",
+                )
+            )
 
-        run_async(_test())
+        self.assertIn("blocked", str(ctx.exception))
 
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_presidio_error_blocks_request(self, mock_anonymize) -> None:
-        """A Presidio error causes the input guard to fail closed (BLOCK)."""
-        from guardrails.presidio_client import PresidioError
+    def test_unexpected_error_blocks_request(self):
+        """A non-Presidio exception still fails closed."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            side_effect=ValueError("boom")
+        )
 
-        mock_anonymize.side_effect = PresidioError("Service unavailable")
+        with self.assertRaises(RuntimeError):
+            run(
+                self.guard.apply_guardrail(
+                    inputs={"texts": ["text"]},
+                    request_data={},
+                    input_type="request",
+                )
+            )
 
-        guard = self._make_guard()
-        request_data = self._make_chat_request("Some message with PII")
+    def test_response_type_is_passthrough(self):
+        """The input guard ignores responses — the output guard owns those."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="nope")
+        inputs = {"texts": ["some response text"]}
 
-        async def _test():
-            result = await guard.inspect(request_data)
-            self.assertEqual(result.action, "BLOCK")
+        result = run(
+            self.guard.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="response"
+            )
+        )
 
-        run_async(_test())
-
-    @patch(f"{GUARD_MODULE}.presidio_anonymize")
-    def test_no_pii_passes_through_unchanged(self, mock_anonymize) -> None:
-        """Text with no PII passes through without modification."""
-        original_text = "What is the weather in Sydney today?"
-
-        async def mock_anon(text):
-            # No PII found -- return text unchanged
-            return {"text": text}
-
-        mock_anonymize.side_effect = lambda text: mock_anon(text)
-
-        guard = self._make_guard()
-        request_data = self._make_chat_request(original_text)
-
-        async def _test():
-            result = await guard.inspect(request_data)
-            self.assertEqual(result.action, "ALLOW")
-            user_items = [
-                item for item in request_data["input"]
-                if item.get("role") == "user"
-            ]
-            self.assertEqual(user_items[0]["content"], original_text)
-
-        run_async(_test())
+        self.assertEqual(result, inputs)
+        self.guard._presidio.analyze_and_anonymize.assert_not_called()
 
 
 if __name__ == "__main__":

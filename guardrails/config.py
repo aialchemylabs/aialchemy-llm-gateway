@@ -23,10 +23,11 @@ WEB_TOOL_ALLOWLIST: frozenset[str] = frozenset(
     {
         "web_search",
         "web_extract",
-        "browser_navigate",
+        "browser_console",
+        "browser_get_images",
+        "browser_vision",
         "browser_snapshot",
-        "browser_evaluate",
-        "browser_click",
+        "browser_navigate",
     }
 )
 
@@ -95,6 +96,11 @@ PROMPT_GUARD_TIMEOUT_SECONDS: float = float(
 # Alias for internal use
 PROMPT_GUARD_TIMEOUT_SECS: float = PROMPT_GUARD_TIMEOUT_SECONDS
 
+# Timeout in seconds for initial model load (download + warm-up).
+PROMPT_GUARD_INIT_TIMEOUT_SECS: float = float(
+    os.environ.get("PROMPT_GUARD_INIT_TIMEOUT_SECS", "60.0")
+)
+
 # --- Prompt Guard chunking ---
 # Maximum TOKENS per chunk sent to Prompt Guard 2.
 # The model's context window is 512 tokens — chunks must not exceed this.
@@ -114,14 +120,13 @@ PROMPT_GUARD_MAX_CHUNKS: int = int(
 # Alias for internal use
 MAX_CHUNK_COUNT: int = PROMPT_GUARD_MAX_CHUNKS
 
-# --- Streaming output guard ---
-# Sentence delimiters that indicate a complete segment for buffered inspection.
-STREAM_BUFFER_SENTENCE_DELIMITERS: list[str] = [
-    ".\n",
-    "!\n",
-    "?\n",
-    ". ",
-    "! ",
-    "? ",
-    "\n\n",
-]
+# --- Stream rejection guard ---
+# When True, AiAlchemyStreamRejectGuard rejects any request with stream=True
+# on the protected route. Per spec §4.4, streaming must not release
+# uninspected final text; until buffered re-emission is proven, the protected
+# route rejects client streaming outright rather than coercing or fake-streaming.
+#
+# Defined ONCE. Do not add a second assignment — a duplicate silently wins.
+STREAM_REJECTION_ENABLED: bool = (
+    os.environ.get("AIALCHEMY_GUARD_REJECT_STREAMING", "true").lower() == "true"
+)
