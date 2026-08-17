@@ -15,11 +15,11 @@ from importlib.util import find_spec
 from pathlib import Path
 
 
-OLD_BLOCK = '''    model_info: Dict[str, Any] = {}
+OLD_BLOCK = '''    model_info: dict[str, Any] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.'''
 
-NEW_BLOCK = '''    model_info: Dict[str, Any] = {}
+NEW_BLOCK = '''    model_info: dict[str, Any] = {}
 
     # The ChatGPT subscription transport is Responses-only. Completion-shaped
     # callers (including the Anthropic Messages proxy) must enter LiteLLM's

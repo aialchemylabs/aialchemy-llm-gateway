@@ -13,6 +13,13 @@ PATCH_MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PATCH_MODULE)
 
 
+LITELLM_1_97_FRAGMENT = '''    model_info: dict[str, Any] = {}
+
+    # Global flag: route ALL OpenAI chat completions through Responses API.
+    # Returns early with minimal model_info; callers only inspect the "mode" key.
+'''
+
+
 class PatchLiteLLMChatGPTResponsesBridgeTests(unittest.TestCase):
     def test_routes_chatgpt_completion_calls_through_responses_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -23,6 +30,20 @@ class PatchLiteLLMChatGPTResponsesBridgeTests(unittest.TestCase):
             patched = target.read_text(encoding="utf-8")
             self.assertNotIn(PATCH_MODULE.OLD_BLOCK, patched)
             self.assertIn(PATCH_MODULE.NEW_BLOCK, patched)
+
+    def test_routes_1_97_chatgpt_calls_through_responses_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "main.py"
+            target.write_text(LITELLM_1_97_FRAGMENT, encoding="utf-8")
+
+            self.assertEqual(PATCH_MODULE.patch_file(target), "patched")
+            patched = target.read_text(encoding="utf-8")
+            self.assertIn('custom_llm_provider == "chatgpt"', patched)
+            self.assertIn('model_info["mode"] = "responses"', patched)
+            self.assertIn(
+                "# Global flag: route ALL OpenAI chat completions through Responses API.",
+                patched,
+            )
 
     def test_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

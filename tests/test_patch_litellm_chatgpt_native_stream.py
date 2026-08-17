@@ -44,6 +44,9 @@ class PatchLiteLLMChatGPTNativeStreamTests(unittest.TestCase):
             self.assertIn("def should_fake_stream(", patched)
             self.assertIn("return False", patched)
             self.assertIn("ChatGPT subscription backend is SSE-only", patched)
+            self.assertIn("model: str | None", patched)
+            self.assertIn("stream: bool | None", patched)
+            self.assertNotIn("Optional[", patched)
 
     def test_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

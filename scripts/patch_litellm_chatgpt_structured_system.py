@@ -16,16 +16,16 @@ from importlib.util import find_spec
 from pathlib import Path
 
 
-OLD_BLOCK = '''        request = super().transform_responses_api_request(
+OLD_BLOCK = '''        request: Final = super().transform_responses_api_request(
             model,
             input,
             response_api_optional_request_params,
             litellm_params,
             headers,
         )
-        base_instructions = get_chatgpt_default_instructions()'''
+        base_instructions: Final = get_chatgpt_default_instructions()'''
 
-NEW_BLOCK = '''        request = super().transform_responses_api_request(
+NEW_BLOCK = '''        request: Final = super().transform_responses_api_request(
             model,
             input,
             response_api_optional_request_params,
@@ -71,7 +71,7 @@ NEW_BLOCK = '''        request = super().transform_responses_api_request(
                 else:
                     request["instructions"] = structured_instructions
 
-        base_instructions = get_chatgpt_default_instructions()'''
+        base_instructions: Final = get_chatgpt_default_instructions()'''
 
 
 def installed_transformation_path() -> Path:

@@ -39,9 +39,9 @@ NEW_BLOCK = '''class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         # The ChatGPT subscription backend is SSE-only. Its request transformer
         # always sets ``stream: true``; fake streaming would remove that field

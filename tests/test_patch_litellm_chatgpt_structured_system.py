@@ -13,6 +13,17 @@ PATCH_MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PATCH_MODULE)
 
 
+LITELLM_1_97_FRAGMENT = '''        request: Final = super().transform_responses_api_request(
+            model,
+            input,
+            response_api_optional_request_params,
+            litellm_params,
+            headers,
+        )
+        base_instructions: Final = get_chatgpt_default_instructions()
+'''
+
+
 class PatchLiteLLMChatGPTStructuredSystemTests(unittest.TestCase):
     def test_moves_structured_system_text_into_responses_instructions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -25,6 +36,20 @@ class PatchLiteLLMChatGPTStructuredSystemTests(unittest.TestCase):
             self.assertIn(PATCH_MODULE.NEW_BLOCK, patched)
             self.assertIn('item.get("role") == "system"', patched)
             self.assertIn('request["instructions"] = structured_instructions', patched)
+
+    def test_moves_1_97_structured_system_text_into_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "transformation.py"
+            target.write_text(LITELLM_1_97_FRAGMENT, encoding="utf-8")
+
+            self.assertEqual(PATCH_MODULE.patch_file(target), "patched")
+            patched = target.read_text(encoding="utf-8")
+            self.assertIn('item.get("role") == "system"', patched)
+            self.assertIn('request["instructions"] = structured_instructions', patched)
+            self.assertIn(
+                "base_instructions: Final = get_chatgpt_default_instructions()",
+                patched,
+            )
 
     def test_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
