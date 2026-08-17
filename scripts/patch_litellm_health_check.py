@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Patch LiteLLM's Responses health probe to use canonical list input.
 
-LiteLLM 1.95.0 passes a bare string to ``aresponses`` during model health
+LiteLLM 1.97.0 passes a bare string to ``aresponses`` during model health
 checks. The ChatGPT subscription adapter intentionally accepts Responses
 input items only, so every otherwise-working ChatGPT deployment is reported
 as unhealthy. A one-item user message list is valid for both the OpenAI

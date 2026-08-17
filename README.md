@@ -16,7 +16,7 @@ This image takes the upstream `litellm[proxy]` release and adds:
 - `prometheus-client==0.20.0` for LiteLLM's authenticated `/metrics` endpoint and spend/key/team/budget series.
 - `prisma==0.11.0` plus `nodejs` + `libatomic1` in the runtime image, with `prisma generate --schema=<litellm>/proxy/schema.prisma` baked into a build step so engine binaries ship in the image (no first-start CDN download).
 - Build-time smoke imports of `litellm.proxy.proxy_server` and `prometheus_client` to catch upstream-extra and callback regressions before the image is published.
-- A narrow, fail-closed LiteLLM 1.95.0 compatibility patch that sends Responses health probes as a one-item input list. This keeps working ChatGPT subscription routes from being reported unhealthy by the Admin UI.
+- A narrow, fail-closed LiteLLM 1.97.0 compatibility patch that sends Responses health probes as a one-item input list. This keeps working ChatGPT subscription routes from being reported unhealthy by the Admin UI.
 - Four fail-closed Claude Code compatibility patches for the ChatGPT subscription provider: completion-shaped calls enter LiteLLM's existing Responses bridge, text-only structured system blocks become Responses `instructions`, LiteLLM's fake-stream fallback is disabled for this SSE-only provider, and explicit `xhigh`/`max` reasoning effort is preserved on dynamic model names. Together these preserve Claude Code's system prompt, keep `stream: true`, and prevent silent effort downgrades on new `chatgpt/*` model names that are not yet present in LiteLLM's model registry. Remove each patch when the pinned upstream release contains equivalent behavior.
 - A build-time streaming contract check proving that ChatGPT subscription requests retain native SSE and `xhigh` effort, while Gemini streaming resolves to Google's `streamGenerateContent?alt=sse` transport.
 - Cosign-signed image provenance and a multi-arch (`linux/amd64`, `linux/arm64`) build.
@@ -31,7 +31,7 @@ docker run --rm \
   -e OPENAI_API_KEY=sk-your-openai-key \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.95.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.97.0
 ```
 
 Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
@@ -98,7 +98,7 @@ The `linux/arm64` build runs the `prisma generate` step under qemu emulation if 
 cosign verify \
   --certificate-identity-regexp 'https://github.com/aialchemylabs/aialchemy-llm-gateway/.github/workflows/image.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.95.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.97.0
 ```
 
 The CI workflow signs every published image and SBOM, and scans both architectures' layers for secret-shaped strings before the build is allowed to succeed.

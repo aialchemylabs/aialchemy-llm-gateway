@@ -36,14 +36,14 @@ ENV UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
-# LiteLLM 1.95.0's Responses health probe passes a bare string to
+# LiteLLM 1.97.0's Responses health probe passes a bare string to
 # `aresponses`, while the ChatGPT subscription adapter requires canonical
 # list input. Apply a fail-closed source patch until upstream ships the fix.
 COPY scripts/patch_litellm_health_check.py /tmp/patch_litellm_health_check.py
 RUN python /tmp/patch_litellm_health_check.py \
  && rm /tmp/patch_litellm_health_check.py
 
-# LiteLLM 1.95.0 dispatches Anthropic Messages requests to the ChatGPT
+# LiteLLM 1.97.0 dispatches Anthropic Messages requests to the ChatGPT
 # subscription provider without first entering its completion-to-Responses
 # bridge. That sends Claude Code's system prompt as an unsupported system-role
 # input item. Force ChatGPT completion calls through the existing bridge, which
