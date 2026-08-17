@@ -130,12 +130,20 @@ def apply_patch() -> str:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Call upstream, then force guardrail invocation if it was skipped."""
-        data = kwargs.get("data")
-        if data is None and args:
-            data = args[0]
+        """Call upstream, then force guardrail invocation if it was skipped.
 
-        guardrail = kwargs.get("guardrail_to_apply")
+        The upstream signature is:
+            process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None)
+
+        Both `data` and `guardrail_to_apply` are positional-or-keyword with no
+        default, so LiteLLM may pass either by position or by name. We must read
+        BOTH forms: reading only kwargs would resolve `guardrail` to None on a
+        positional call and silently skip inspection.
+        """
+        data = kwargs.get("data", args[0] if len(args) > 0 else None)
+        guardrail = kwargs.get(
+            "guardrail_to_apply", args[1] if len(args) > 1 else None
+        )
 
         result = await original(self, *args, **kwargs)
 

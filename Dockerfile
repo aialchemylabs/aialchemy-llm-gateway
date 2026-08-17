@@ -88,8 +88,17 @@ RUN python /tmp/verify_litellm_streaming_contract.py \
 RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
 
 # Copy the AiAlchemy guardrails package and its tests into the image.
+# scripts/ is included because the patch regression tests load each patch
+# module by path to assert it is idempotent and fails closed.
 COPY guardrails/ /app/guardrails/
 COPY tests/ /app/tests/
+COPY scripts/ /app/scripts/
+
+# Prove the wrapper can actually receive the request dict and the selected
+# guardrail. The wrapper reads both defensively, so a renamed upstream parameter
+# would make it resolve the guardrail to None and skip inspection silently —
+# with unit tests still passing. This gate fails the build instead.
+RUN python scripts/verify_responses_guardrail_contract.py
 
 # Verify the Responses guardrail patch can bind to the pinned LiteLLM.
 #
