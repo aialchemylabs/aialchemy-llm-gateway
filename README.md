@@ -116,7 +116,18 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 ```
 .
 ├── Dockerfile                 # python:3.13-slim + uv + nodejs + prisma generate + healthcheck
-├── requirements.txt           # litellm[proxy], prometheus, otel, prisma — pinned
+├── requirements.txt           # litellm[proxy], prometheus, otel, prisma, torch, transformers — pinned
+├── guardrails/                # AiAlchemy custom LiteLLM guardrails (aialchemy-global-baseline-v1)
+│   ├── config.py              # Version-controlled thresholds, allowlists, entity lists
+│   ├── presidio_client.py     # Async HTTP client for self-hosted Presidio services
+│   ├── prompt_guard.py        # Prompt Guard 2 86M chunking and classification
+│   ├── prompt_guard_client.py # Lightweight async wrapper for in-process inference
+│   ├── pii_input_guard.py     # Step 1: mask PII in provider-bound content
+│   ├── web_tool_result_guard.py # Step 2: inspect untrusted web-tool results
+│   └── pii_output_guard.py    # Step 3: mask PII in final user-visible responses
+├── scripts/                   # Build-time source patches and contract verifications
+├── tests/                     # Unit tests (config + presidio run locally; guards run in Docker)
+├── docs/                      # License obligations and design documents
 ├── .github/workflows/image.yml # CI: build, sign with cosign, secret-scan, publish
 ├── LICENSE                    # Apache 2.0
 ├── NOTICE                     # Attribution to upstream LiteLLM

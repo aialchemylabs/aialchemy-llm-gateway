@@ -84,8 +84,27 @@ RUN python /tmp/verify_litellm_streaming_contract.py \
  && rm /tmp/verify_litellm_streaming_contract.py
 
 # Smoke imports at build time. This catches upstream-extra regressions and
-# verifies the callback dependency that LiteLLM imports only at proxy startup.
+# verifies the callback dependency that LiteLLM imports at proxy startup.
+# Also verifies the guardrail package imports correctly with all deps.
 RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
+
+# Copy the AiAlchemy guardrails package into the image.
+COPY guardrails/ /app/guardrails/
+
+# Smoke test: verify the guardrail modules load correctly and Prompt Guard
+# model infrastructure is importable (model weights are downloaded at runtime).
+RUN python -c "\
+from guardrails.config import WEB_TOOL_ALLOWLIST, PRESIDIO_ENTITIES; \
+from guardrails.presidio_client import PresidioClient, PresidioError; \
+from guardrails.prompt_guard import chunk_text, PromptGuardClassifier, ChunkLimitExceeded; \
+from guardrails.prompt_guard_client import PromptGuardClient, PromptGuardError; \
+from guardrails.pii_input_guard import AiAlchemyPiiInputGuard; \
+from guardrails.web_tool_result_guard import AiAlchemyWebToolResultGuard; \
+from guardrails.pii_output_guard import AiAlchemyPiiOutputGuard; \
+print('guardrails: all modules imported successfully'); \
+print(f'  web-tool allowlist: {sorted(WEB_TOOL_ALLOWLIST)}'); \
+print(f'  presidio entities: {len(PRESIDIO_ENTITIES)} configured'); \
+"
 
 # Generate the Prisma client + engine binaries against the schema.prisma
 # that ships inside the litellm package. Doing this at build time means
