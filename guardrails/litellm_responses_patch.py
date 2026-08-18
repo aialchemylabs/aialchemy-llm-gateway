@@ -9,9 +9,8 @@ contains only ``function_call`` + ``function_call_output`` items therefore
 produces zero extracted texts, and the handler skips calling the selected
 guardrail's ``apply_guardrail()`` entirely.
 
-That is the exact case ``must-have-requirements.md`` §4.3 prohibits: a web-tool
-result reaching the provider without Presidio masking or Prompt Guard
-classification.
+That permits a web-tool result to reach the provider without Presidio masking
+or Prompt Guard classification.
 
 WHAT THIS DOES
 --------------
@@ -111,6 +110,31 @@ def _has_uninspected_tool_output(input_items: list[Any]) -> bool:
     return False
 
 
+class _InvocationTrackingGuardrail:
+    """Per-request proxy that records whether upstream invoked the guardrail.
+
+    Tracking the actual call is safer than reimplementing LiteLLM's evolving
+    text-extraction rules.  It also prevents mixed message/tool continuations
+    from running an expensive masking/classification guard twice.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+        self.invoked = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    async def apply_guardrail(self, *args: Any, **kwargs: Any) -> Any:
+        self.invoked = True
+        apply_guardrail = getattr(self._delegate, "apply_guardrail", None)
+        if apply_guardrail is None:
+            raise PatchError(
+                "Selected guardrail exposes no apply_guardrail() — request blocked."
+            )
+        return await apply_guardrail(*args, **kwargs)
+
+
 def apply_patch() -> str:
     """Wrap process_input_messages to guarantee guardrail invocation.
 
@@ -144,8 +168,25 @@ def apply_patch() -> str:
         guardrail = kwargs.get(
             "guardrail_to_apply", args[1] if len(args) > 1 else None
         )
+        logging_obj = kwargs.get(
+            "litellm_logging_obj", args[2] if len(args) > 2 else None
+        )
 
-        result = await original(self, *args, **kwargs)
+        tracker: _InvocationTrackingGuardrail | None = None
+        original_args = list(args)
+        original_kwargs = dict(kwargs)
+        if guardrail is not None:
+            tracker = _InvocationTrackingGuardrail(guardrail)
+            if "guardrail_to_apply" in original_kwargs:
+                original_kwargs["guardrail_to_apply"] = tracker
+            elif len(original_args) > 1:
+                original_args[1] = tracker
+            else:
+                raise PatchError(
+                    "Unable to bind guardrail_to_apply — upstream signature changed."
+                )
+
+        result = await original(self, *original_args, **original_kwargs)
 
         # The dict upstream returned (or the one we were handed) is the request
         # that continues to the provider.
@@ -154,20 +195,14 @@ def apply_patch() -> str:
 
         # Nothing to inspect, or no guardrail selected for this request:
         # upstream behaviour is already correct.
-        if not input_items or guardrail is None:
+        if not input_items or tracker is None:
             return result
 
-        # If there is no function_call_output, upstream's text extraction saw
-        # everything there was to see and already invoked the guardrail.
-        if not _has_uninspected_tool_output(input_items):
+        # If upstream invoked the selected guardrail, it saw at least one normal
+        # text input.  The guard received the same raw request_data and therefore
+        # had an opportunity to inspect function_call_output directly as well.
+        if tracker.invoked or not _has_uninspected_tool_output(input_items):
             return result
-
-        apply_guardrail = getattr(guardrail, "apply_guardrail", None)
-        if apply_guardrail is None:
-            raise PatchError(
-                "Selected guardrail exposes no apply_guardrail() — cannot "
-                "inspect function_call_output. Request blocked."
-            )
 
         # Invoke the SELECTED guardrail on the raw request. Guards that inspect
         # function_call_output read it from request_data, so an empty texts list
@@ -176,10 +211,11 @@ def apply_patch() -> str:
             "aialchemy-responses-patch: forcing guardrail invocation for "
             "tool-only Responses continuation"
         )
-        await apply_guardrail(
+        await tracker.apply_guardrail(
             inputs={"texts": [], "structured_messages": []},
             request_data=effective,
             input_type="request",
+            logging_obj=logging_obj,
         )
 
         return result

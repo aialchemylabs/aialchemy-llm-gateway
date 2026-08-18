@@ -19,6 +19,7 @@ This image takes the upstream `litellm[proxy]` release and adds:
 - A narrow, fail-closed LiteLLM 1.97.0 compatibility patch that sends Responses health probes as a one-item input list. This keeps working ChatGPT subscription routes from being reported unhealthy by the Admin UI.
 - Four fail-closed Claude Code compatibility patches for the ChatGPT subscription provider: completion-shaped calls enter LiteLLM's existing Responses bridge, text-only structured system blocks become Responses `instructions`, LiteLLM's fake-stream fallback is disabled for this SSE-only provider, and explicit `xhigh`/`max` reasoning effort is preserved on dynamic model names. Together these preserve Claude Code's system prompt, keep `stream: true`, and prevent silent effort downgrades on new `chatgpt/*` model names that are not yet present in LiteLLM's model registry. Remove each patch when the pinned upstream release contains equivalent behavior.
 - A build-time streaming contract check proving that ChatGPT subscription requests retain native SSE and `xhigh` effort, while Gemini streaming resolves to Google's `streamGenerateContent?alt=sse` transport.
+- Fail-closed custom guardrails for provider-bound PII, untrusted web-tool results, final-response PII, and protected-route client streaming. Prompt Guard 2 uses the source-pinned Hugging Face revision in `guardrails/config.py`, lossless overlapping token chunks, a finite raw-result limit, and bounded initialization, inference, and whole-result timeouts. These modules do not activate themselves; the runtime-mounted LiteLLM policy remains responsible for attaching them to the protected route in the required order.
 - Cosign-signed image provenance and a multi-arch (`linux/amd64`, `linux/arm64`) build.
 
 Except for the documented compatibility patches, the LiteLLM proxy is the same source release as `pip install litellm[proxy]==X.Y.Z`. Provider configuration, model routing, and feature flags remain upstream's surface. See [LiteLLM's docs](https://docs.litellm.ai/docs/proxy/configs) for `config.yaml` details.
@@ -120,8 +121,9 @@ CI only triggers on changes to `Dockerfile` or `requirements.txt`. README / docs
 ├── guardrails/                # AiAlchemy custom LiteLLM guardrails (aialchemy-global-baseline-v1)
 │   ├── config.py              # Version-controlled thresholds, allowlists, entity lists
 │   ├── presidio_client.py     # Async HTTP client for self-hosted Presidio services
-│   ├── prompt_guard.py        # Prompt Guard 2 86M token chunking and classification
-│   ├── prompt_guard_client.py # Fail-closed async inference wrapper (binary labels)
+│   ├── prompt_guard.py        # Pinned Prompt Guard 2 tokenizer and lossless chunking
+│   ├── prompt_guard_client.py # Pinned fail-closed async model inference (binary labels)
+│   ├── responses_tool_output.py # Strict structured tool-output parsing and rewriting
 │   ├── pii_input_guard.py     # Step 1: mask PII in provider-bound content
 │   ├── web_tool_result_guard.py # Step 2: inspect untrusted web-tool results
 │   ├── pii_output_guard.py    # Step 3: mask PII in final user-visible responses

@@ -18,6 +18,8 @@ Prompt Guard error/timeout, chunk limit exceeded, non-scannable structured outpu
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 from typing import Any, Literal, Optional
 
@@ -28,18 +30,27 @@ from guardrails.config import (
     MAX_CHUNK_COUNT,
     PROMPT_GUARD_CHUNK_OVERLAP,
     PROMPT_GUARD_CHUNK_SIZE,
+    PROMPT_GUARD_MAX_RESULT_BYTES,
+    PROMPT_GUARD_TOTAL_TIMEOUT_SECONDS,
     WEB_TOOL_ALLOWLIST,
 )
 from guardrails.presidio_client import PresidioClient, PresidioError
 from guardrails.prompt_guard_client import PromptGuardClient, PromptGuardError
+from guardrails.responses_tool_output import (
+    ToolOutputShapeError,
+    collect_text_parts,
+    replace_text_parts,
+    total_utf8_bytes,
+)
 
 # Token-based chunking — fail closed if import fails (dependency missing).
 try:
-    from guardrails.prompt_guard import ChunkLimitExceeded, chunk_text
+    from guardrails.prompt_guard import ChunkLimitExceeded, chunk_text, get_tokenizer
 except ImportError as _import_err:
     _chunk_import_error: Optional[ImportError] = _import_err
     ChunkLimitExceeded = None  # type: ignore[assignment, misc]
     chunk_text = None  # type: ignore[assignment]
+    get_tokenizer = None  # type: ignore[assignment]
 else:
     _chunk_import_error = None
 
@@ -87,13 +98,20 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
         # Build call_id → tool_name map from function_call items in this request
         call_id_to_name = self._build_call_id_map(input_items)
 
-        # Process each function_call_output
+        # Process each function_call_output. A call may produce exactly one
+        # result; duplicates are ambiguous/replay-prone and fail closed.
+        output_call_ids: set[str] = set()
         for item in input_items:
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "Web tool result guard: malformed Responses input item — "
+                    "request blocked"
+                )
             if item.get("type") != "function_call_output":
                 continue
 
             call_id = item.get("call_id")
-            if not call_id:
+            if not isinstance(call_id, str) or not call_id.strip():
                 logger.error(
                     "web-tool-guard: function_call_output missing call_id — blocking"
                 )
@@ -101,6 +119,16 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
                     "Web tool result guard: function_call_output has no call_id — "
                     "cannot determine tool provenance — request blocked"
                 )
+            call_id = call_id.strip()
+            if call_id in output_call_ids:
+                logger.error(
+                    "web-tool-guard: duplicate function_call_output call_id — blocking"
+                )
+                raise RuntimeError(
+                    "Web tool result guard: duplicate function_call_output call_id — "
+                    "request blocked"
+                )
+            output_call_ids.add(call_id)
 
             tool_name = call_id_to_name.get(call_id)
             if tool_name is None:
@@ -108,10 +136,9 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
                 # function_call that produced this call_id is not in the current
                 # request input list. We cannot verify tool provenance → fail closed.
                 logger.error(
-                    "web-tool-guard: no function_call found for call_id=%r in "
+                    "web-tool-guard: no function_call found for output call_id in "
                     "current request input — cannot verify tool association "
                     "(previous_response_id continuation?) — blocking",
-                    call_id,
                 )
                 raise RuntimeError(
                     "Web tool result guard: cannot map call_id to a function_call — "
@@ -127,24 +154,55 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
                 )
                 continue
 
-            # Extract scannable text from the output, handling structured output
-            output_text = self._extract_output_text(item, tool_name)
-            if not output_text:
+            output = item.get("output", "")
+            try:
+                text_parts = collect_text_parts(output)
+            except ToolOutputShapeError as exc:
+                logger.error(
+                    "web-tool-guard: unsupported output shape from tool %r — blocking",
+                    tool_name,
+                )
+                raise RuntimeError(
+                    f"Web tool result guard: {exc} — request blocked"
+                ) from exc
+
+            if total_utf8_bytes(text_parts) > PROMPT_GUARD_MAX_RESULT_BYTES:
+                logger.error(
+                    "web-tool-guard: result exceeds raw size limit — blocking"
+                )
+                raise RuntimeError(
+                    "Web tool result guard: result exceeds the configured size limit — "
+                    "request blocked"
+                )
+
+            if not any(part.text for part in text_parts):
                 continue
 
             logger.debug("web-tool-guard: inspecting output for tool %r", tool_name)
 
             # Step 1: Presidio masks PII before Prompt Guard sees the text
-            masked_output = await self._mask_output(output_text)
+            masked_parts = [
+                await self._mask_output(part.text) if part.text else part.text
+                for part in text_parts
+            ]
+            masked_text = "\n".join(text for text in masked_parts if text)
 
             # Step 2: Chunk the masked output (token-based)
-            chunks = self._chunk_text(masked_output)
+            chunks = await self._chunk_text(masked_text)
 
             # Step 3: Prompt Guard classifies each chunk
             await self._classify_chunks(chunks, tool_name)
 
             # Step 4: Rewrite output with Presidio-masked version
-            item["output"] = masked_output
+            try:
+                item["output"] = replace_text_parts(
+                    output, text_parts, masked_parts
+                )
+            except ToolOutputShapeError as exc:
+                raise RuntimeError(
+                    "Web tool result guard: output changed during rewrite — "
+                    "request blocked"
+                ) from exc
             logger.debug("web-tool-guard: output rewritten with masked content")
 
         return inputs
@@ -158,90 +216,32 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
         """
         mapping: dict[str, str] = {}
         for item in input_items:
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "Web tool result guard: malformed Responses input item — "
+                    "request blocked"
+                )
             if item.get("type") == "function_call":
                 call_id = item.get("call_id")
                 name = item.get("name")
-                if call_id and name:
-                    mapping[call_id] = name
-        return mapping
-
-    def _extract_output_text(
-        self, item: dict[str, Any], tool_name: str
-    ) -> Optional[str]:
-        """Extract scannable text from function_call_output.
-
-        Handles:
-        - String output: returned as-is.
-        - List output (browser_vision structured): extracts string parts,
-          fails closed if any part is non-scannable (not a string).
-        - Other types: fails closed.
-
-        Returns None for empty output (skip scanning).
-        """
-        output = item.get("output", "")
-
-        if isinstance(output, str):
-            return output if output else None
-
-        if isinstance(output, list):
-            # browser_vision and similar tools may return structured list output.
-            # Extract all string parts; fail closed if any part is non-scannable.
-            text_parts: list[str] = []
-            for i, part in enumerate(output):
-                if isinstance(part, str):
-                    if part:
-                        text_parts.append(part)
-                elif isinstance(part, dict):
-                    # Dicts with a "text" key are scannable
-                    text_value = part.get("text")
-                    if isinstance(text_value, str):
-                        if text_value:
-                            text_parts.append(text_value)
-                    else:
-                        # Non-text dict content (e.g. image data) — non-scannable
-                        logger.error(
-                            "web-tool-guard: non-scannable dict element at index %d "
-                            "in structured output from tool %r — blocking",
-                            i,
-                            tool_name,
-                        )
-                        raise RuntimeError(
-                            f"Web tool result guard: non-scannable structured output "
-                            f"element at index {i} from {tool_name!r} — "
-                            f"cannot verify safety — request blocked"
-                        )
-                else:
-                    # Unknown type in list — fail closed
-                    logger.error(
-                        "web-tool-guard: non-scannable element type %r at index %d "
-                        "in structured output from tool %r — blocking",
-                        type(part).__name__,
-                        i,
-                        tool_name,
-                    )
+                if (
+                    not isinstance(call_id, str)
+                    or not call_id.strip()
+                    or not isinstance(name, str)
+                    or not name.strip()
+                ):
                     raise RuntimeError(
-                        f"Web tool result guard: non-scannable output element "
-                        f"(type={type(part).__name__}) at index {i} from "
-                        f"{tool_name!r} — request blocked"
+                        "Web tool result guard: malformed function_call provenance — "
+                        "request blocked"
                     )
-
-            if not text_parts:
-                return None
-            # Join parts for scanning; rewrite item output as joined string
-            joined = "\n".join(text_parts)
-            return joined
-
-        # Output is neither string nor list — fail closed
-        logger.error(
-            "web-tool-guard: unexpected output type %r from tool %r — blocking",
-            type(output).__name__,
-            tool_name,
-        )
-        raise RuntimeError(
-            f"Web tool result guard: unexpected output type "
-            f"({type(output).__name__}) from {tool_name!r} — "
-            f"cannot scan — request blocked"
-        )
+                call_id = call_id.strip()
+                if call_id in mapping:
+                    raise RuntimeError(
+                        "Web tool result guard: duplicate function_call call_id — "
+                        "request blocked"
+                    )
+                mapping[call_id] = name.strip()
+        return mapping
 
     async def _mask_output(self, text: str) -> str:
         """Run Presidio on raw tool output. Fail closed on error."""
@@ -261,7 +261,7 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
                 "Web tool result guard: unexpected Presidio failure — request blocked"
             ) from exc
 
-    def _chunk_text(self, text: str) -> list[str]:
+    async def _chunk_text(self, text: str) -> list[str]:
         """Divide text into bounded, overlapping chunks for Prompt Guard.
 
         Uses token-based chunking to respect the model's 512-token context window.
@@ -271,7 +271,7 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
             return []
 
         # Fail closed if chunk_text could not be imported
-        if chunk_text is None:
+        if chunk_text is None or get_tokenizer is None:
             logger.error(
                 "web-tool-guard: chunk_text import failed (%s) — blocking",
                 _chunk_import_error,
@@ -282,21 +282,38 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
             )
 
         try:
-            return chunk_text(
-                text,
-                chunk_size=PROMPT_GUARD_CHUNK_SIZE,
-                overlap=PROMPT_GUARD_CHUNK_OVERLAP,
-                max_chunks=MAX_CHUNK_COUNT,
+            loop = asyncio.get_running_loop()
+            tokenizer = await loop.run_in_executor(None, get_tokenizer)
+            return await loop.run_in_executor(
+                None,
+                functools.partial(
+                    chunk_text,
+                    text,
+                    chunk_size=PROMPT_GUARD_CHUNK_SIZE,
+                    overlap=PROMPT_GUARD_CHUNK_OVERLAP,
+                    max_chunks=MAX_CHUNK_COUNT,
+                    tokenizer=tokenizer,
+                ),
             )
-        except ChunkLimitExceeded:
+        except Exception as exc:
+            if ChunkLimitExceeded is not None and isinstance(
+                exc, ChunkLimitExceeded
+            ):
+                logger.error(
+                    "web-tool-guard: text exceeds maximum chunk count (%d) — blocking",
+                    MAX_CHUNK_COUNT,
+                )
+                raise RuntimeError(
+                    f"Web tool result guard: result exceeds chunk limit "
+                    f"({MAX_CHUNK_COUNT}) — request blocked"
+                ) from exc
             logger.error(
-                "web-tool-guard: text exceeds maximum chunk count (%d) — blocking",
-                MAX_CHUNK_COUNT,
+                "web-tool-guard: tokenizer/chunking failed — blocking"
             )
             raise RuntimeError(
-                f"Web tool result guard: result exceeds chunk limit "
-                f"({MAX_CHUNK_COUNT}) — request blocked"
-            )
+                "Web tool result guard: tokenizer or chunking failure — "
+                "request blocked"
+            ) from exc
 
     async def _classify_chunks(
         self, chunks: list[str], tool_name: str
@@ -305,37 +322,47 @@ class AiAlchemyWebToolResultGuard(CustomGuardrail):
 
         Fail closed on Prompt Guard error or timeout.
         """
-        for i, chunk in enumerate(chunks):
-            try:
-                is_malicious = await self._prompt_guard.classify(chunk)
-            except PromptGuardError as exc:
-                logger.error(
-                    "web-tool-guard: Prompt Guard error on chunk %d — blocking", i
-                )
-                raise RuntimeError(
-                    "Web tool result guard: Prompt Guard failure — request blocked"
-                ) from exc
-            except Exception as exc:
-                logger.error(
-                    "web-tool-guard: unexpected Prompt Guard error — blocking"
-                )
-                raise RuntimeError(
-                    "Web tool result guard: unexpected Prompt Guard failure — "
-                    "request blocked"
-                ) from exc
+        async def classify_all() -> None:
+            for i, chunk in enumerate(chunks):
+                try:
+                    is_malicious = await self._prompt_guard.classify(chunk)
+                except PromptGuardError as exc:
+                    logger.error(
+                        "web-tool-guard: Prompt Guard error on chunk %d — blocking", i
+                    )
+                    raise RuntimeError(
+                        "Web tool result guard: Prompt Guard failure — request blocked"
+                    ) from exc
+                except Exception as exc:
+                    logger.error(
+                        "web-tool-guard: unexpected Prompt Guard error — blocking"
+                    )
+                    raise RuntimeError(
+                        "Web tool result guard: unexpected Prompt Guard failure — "
+                        "request blocked"
+                    ) from exc
 
-            if is_malicious:
-                logger.warning(
-                    "web-tool-guard: malicious content detected in chunk %d "
-                    "from tool %r — blocking entire continuation",
-                    i,
-                    tool_name,
-                )
-                raise RuntimeError(
-                    "Web tool result guard: malicious content detected in "
-                    f"web tool result from {tool_name!r} — "
-                    "entire provider continuation blocked"
-                )
+                if is_malicious:
+                    logger.warning(
+                        "web-tool-guard: malicious content detected in chunk %d "
+                        "from tool %r — blocking entire continuation",
+                        i,
+                        tool_name,
+                    )
+                    raise RuntimeError(
+                        "Web tool result guard: malicious content detected in "
+                        f"web tool result from {tool_name!r} — "
+                        "entire provider continuation blocked"
+                    )
+
+        try:
+            await asyncio.wait_for(
+                classify_all(), timeout=PROMPT_GUARD_TOTAL_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                "Web tool result guard: Prompt Guard total timeout — request blocked"
+            ) from exc
 
         logger.debug(
             "web-tool-guard: all %d chunks classified as benign", len(chunks)

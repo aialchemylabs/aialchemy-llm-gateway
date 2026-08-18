@@ -33,7 +33,8 @@ COPY requirements.txt /app/requirements.txt
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
 # LiteLLM 1.97.0's Responses health probe passes a bare string to
@@ -60,6 +61,13 @@ COPY scripts/patch_litellm_chatgpt_structured_system.py /tmp/patch_litellm_chatg
 RUN python /tmp/patch_litellm_chatgpt_structured_system.py \
  && rm /tmp/patch_litellm_chatgpt_structured_system.py
 
+# LiteLLM's bridge maps schema output to Responses text.format, but the ChatGPT
+# provider drops it from its final request allowlist. Keep Hindsight's
+# structured extraction contract intact through provider dispatch.
+COPY scripts/patch_litellm_chatgpt_structured_output.py /tmp/patch_litellm_chatgpt_structured_output.py
+RUN python /tmp/patch_litellm_chatgpt_structured_output.py \
+ && rm /tmp/patch_litellm_chatgpt_structured_output.py
+
 # The ChatGPT subscription Responses endpoint is SSE-only. LiteLLM's generic
 # fake-stream heuristic strips the provider's forced `stream: true` for newly
 # released model names it does not recognize. Disable fake streaming for this
@@ -67,6 +75,39 @@ RUN python /tmp/patch_litellm_chatgpt_structured_system.py \
 COPY scripts/patch_litellm_chatgpt_native_stream.py /tmp/patch_litellm_chatgpt_native_stream.py
 RUN python /tmp/patch_litellm_chatgpt_native_stream.py \
  && rm /tmp/patch_litellm_chatgpt_native_stream.py
+
+# ChatGPT requires SSE on the provider leg. When the client requested a
+# non-streaming response, buffer that internal stream so final-response hooks
+# and output guardrails run before the proxy releases any text.
+COPY scripts/patch_litellm_chatgpt_internal_sse_buffering.py /tmp/patch_litellm_chatgpt_internal_sse_buffering.py
+RUN python /tmp/patch_litellm_chatgpt_internal_sse_buffering.py \
+ && rm /tmp/patch_litellm_chatgpt_internal_sse_buffering.py
+
+# LiteLLM's deployment post-call iterator treats an unchanged response from a
+# non-matching pre-call guardrail as final, suppressing later output guards.
+COPY scripts/patch_litellm_post_call_guardrail_iteration.py /tmp/patch_litellm_post_call_guardrail_iteration.py
+RUN python /tmp/patch_litellm_post_call_guardrail_iteration.py \
+ && rm /tmp/patch_litellm_post_call_guardrail_iteration.py
+
+# Ordered pipeline steps temporarily narrow metadata.guardrails. Restore the
+# full policy selection so post-call guards survive pre-call execution.
+COPY scripts/patch_litellm_pipeline_guardrail_selection.py /tmp/patch_litellm_pipeline_guardrail_selection.py
+RUN python /tmp/patch_litellm_pipeline_guardrail_selection.py \
+ && rm /tmp/patch_litellm_pipeline_guardrail_selection.py
+
+# Virtual keys must not weaken mandatory policy through request metadata.
+# Guardrail mutation is denied unless a team explicitly grants it.
+COPY scripts/patch_litellm_guardrail_mutation_default_deny.py /tmp/patch_litellm_guardrail_mutation_default_deny.py
+RUN python /tmp/patch_litellm_guardrail_mutation_default_deny.py \
+ && rm /tmp/patch_litellm_guardrail_mutation_default_deny.py
+
+# ChatGPT subscription streams can finish with an empty output array after
+# emitting complete output_item.done events. LiteLLM's non-streaming
+# Responses-to-Chat-Completions bridge must retain those completed items or
+# Hindsight receives a 500 for every otherwise-successful LLM request.
+COPY scripts/patch_litellm_responses_bridge_sse_aggregation.py /tmp/patch_litellm_responses_bridge_sse_aggregation.py
+RUN python /tmp/patch_litellm_responses_bridge_sse_aggregation.py \
+ && rm /tmp/patch_litellm_responses_bridge_sse_aggregation.py
 
 # Dynamic chatgpt/* routes can lead LiteLLM's static capability lookup to
 # silently reduce xhigh/max effort to high. Preserve the explicit client value
@@ -104,9 +145,9 @@ RUN python scripts/verify_responses_guardrail_contract.py
 #
 # LiteLLM 1.97.0 skips guardrail invocation for Responses continuations that
 # contain only function_call / function_call_output, because its text extraction
-# finds nothing to inspect. That is the bypass must-have-requirements.md §4.3
-# prohibits. This step fails the build if the handler class or method we wrap is
-# absent, so an image whose tool-result path is unguarded is never published.
+# finds nothing to inspect. This step fails the build if the handler class or
+# method we wrap is absent, so an image whose tool-result path is unguarded is
+# never published.
 RUN python -m guardrails.litellm_responses_patch
 
 # Activate the patch for every interpreter in this image. sitecustomize is
@@ -128,7 +169,7 @@ RUN SITE_DIR="$(python -c 'import site; print(site.getsitepackages()[0])')" \
 RUN python -c "\
 from guardrails.config import WEB_TOOL_ALLOWLIST, PRESIDIO_ENTITIES; \
 from guardrails.presidio_client import PresidioClient, PresidioError; \
-from guardrails.prompt_guard import chunk_text, PromptGuardClassifier, ChunkLimitExceeded; \
+from guardrails.prompt_guard import chunk_text, get_tokenizer, ChunkLimitExceeded; \
 from guardrails.prompt_guard_client import PromptGuardClient, PromptGuardError; \
 from guardrails.pii_input_guard import AiAlchemyPiiInputGuard; \
 from guardrails.web_tool_result_guard import AiAlchemyWebToolResultGuard; \
@@ -138,6 +179,11 @@ print('guardrails: all modules imported successfully'); \
 print(f'  web-tool allowlist: {sorted(WEB_TOOL_ALLOWLIST)}'); \
 print(f'  presidio entities: {len(PRESIDIO_ENTITIES)} configured'); \
 "
+
+# Exercise the real pinned LiteLLM Responses output adapter. Unit tests stub
+# LiteLLM for isolation; this gate proves final assistant text is rewritten and
+# neighboring function-call structure is preserved by the installed release.
+RUN python scripts/verify_responses_output_guard_contract.py
 
 # EXECUTE the behavioural test suite. Importing the modules is not evidence —
 # these tests are what prove the fail-closed contracts (PII masking reaches the
@@ -158,6 +204,6 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD curl -fsS http://localhost:4000/health/liveliness || exit 1
 
 # Config is runtime-mounted at /app/config.yaml. The image never ships a
-# config file — Requirements §3 (Functional) is explicit that config must
-# never be baked into the image.
+# deployment config, so provider routes and credentials are never baked into
+# the image.
 ENTRYPOINT ["litellm", "--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]

@@ -127,10 +127,12 @@ class TestPiiInputGuardRawFields(unittest.TestCase):
             request_data["input"][0]["output"], "mail <EMAIL_ADDRESS>"
         )
 
-    def test_non_string_function_call_output_untouched(self):
-        """Structured output is left for the web-tool guard to adjudicate."""
-        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="nope")
-        structured = [{"type": "image", "data": "..."}]
+    def test_structured_text_function_call_output_is_masked_in_place(self):
+        """Provider-bound structured text is masked without flattening its shape."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            side_effect=lambda text: f"masked:{text}"
+        )
+        structured = [{"type": "text", "text": "Jane"}, "jane@example.com"]
         request_data = {
             "input": [
                 {"type": "function_call_output", "call_id": "c1", "output": structured}
@@ -143,7 +145,33 @@ class TestPiiInputGuardRawFields(unittest.TestCase):
             )
         )
 
-        self.assertEqual(request_data["input"][0]["output"], structured)
+        self.assertEqual(
+            request_data["input"][0]["output"],
+            [
+                {"type": "text", "text": "masked:Jane"},
+                "masked:jane@example.com",
+            ],
+        )
+
+    def test_non_scannable_function_call_output_fails_closed(self):
+        """Unsupported provider-bound tool output cannot bypass Presidio."""
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="nope")
+        structured = [{"type": "image", "data": "..."}]
+        request_data = {
+            "input": [
+                {"type": "function_call_output", "call_id": "c1", "output": structured}
+            ]
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs={"texts": []}, request_data=request_data, input_type="request"
+                )
+            )
+
+        self.assertIn("non-scannable", str(ctx.exception))
+        self.guard._presidio.analyze_and_anonymize.assert_not_called()
 
 
 class TestPiiInputGuardFailClosed(unittest.TestCase):

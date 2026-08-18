@@ -1,81 +1,110 @@
-"""Prompt Guard 2 86M integration for prompt injection/jailbreak detection.
-
-Uses Meta's Prompt Guard 2 (mDeBERTa-v3-base encoder-only classifier) to classify
-text segments as benign or malicious. Text is chunked by TOKEN count with overlap
-to ensure no content is missed and no injection can hide at boundaries.
-
-Prompt Guard 2 is a BINARY classifier:
-- Labels: "benign" or "malicious"
-- Context window: 512 tokens
-- License: Llama 4 Community License
-
-Text longer than 512 tokens MUST be divided into overlapping chunks.
-Truncation is PROHIBITED — all text must be covered.
-"""
+"""Pinned Prompt Guard 2 tokenizer and lossless overlapping token chunking."""
 
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
-import torch
-from transformers import AutoTokenizer, pipeline
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 
 from guardrails.config import (
     MAX_CHUNK_COUNT,
     PROMPT_GUARD_CHUNK_OVERLAP,
     PROMPT_GUARD_CHUNK_SIZE,
-    PROMPT_GUARD_DEVICE,
+    PROMPT_GUARD_INIT_TIMEOUT_SECS,
     PROMPT_GUARD_MODEL_ID,
-    PROMPT_GUARD_THRESHOLD,
+    PROMPT_GUARD_MODEL_REVISION,
 )
 
 
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
 class PromptGuardError(Exception):
-    """Base exception for Prompt Guard operations."""
+    """Base exception for Prompt Guard preparation failures."""
 
 
 class ChunkLimitExceeded(PromptGuardError):
-    """Raised when input text produces more chunks than the configured maximum.
+    """Raised instead of truncating a result that needs too many chunks."""
 
-    This is a fail-closed safety measure: excessively long inputs are rejected
-    rather than silently truncated.
+
+class PromptGuardInitializationError(PromptGuardError):
+    """Raised when the pinned tokenizer cannot be loaded and verified in time."""
+
+
+_tokenizer: Optional[Any] = None
+_tokenizer_error: Optional[BaseException] = None
+_tokenizer_load_started = False
+_tokenizer_load_done = threading.Event()
+_tokenizer_lock = threading.Lock()
+
+
+def _load_tokenizer_in_background() -> None:
+    global _tokenizer, _tokenizer_error
+    try:
+        snapshot_path = snapshot_download(
+            repo_id=PROMPT_GUARD_MODEL_ID,
+            revision=PROMPT_GUARD_MODEL_REVISION,
+            allow_patterns=(
+                "config.json",
+                "special_tokens_map.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+            ),
+        )
+        if Path(snapshot_path).name != PROMPT_GUARD_MODEL_REVISION:
+            raise PromptGuardInitializationError(
+                "Prompt Guard tokenizer snapshot revision could not be verified"
+            )
+        tokenizer = AutoTokenizer.from_pretrained(
+            snapshot_path,
+            local_files_only=True,
+            use_fast=True,
+        )
+        model_max_length = getattr(tokenizer, "model_max_length", None)
+        if not isinstance(model_max_length, int) or model_max_length < 512:
+            raise PromptGuardInitializationError(
+                "Prompt Guard tokenizer reports an invalid context length"
+            )
+        with _tokenizer_lock:
+            _tokenizer = tokenizer
+    except BaseException as exc:  # stored and surfaced as a content-free error
+        with _tokenizer_lock:
+            _tokenizer_error = exc
+    finally:
+        _tokenizer_load_done.set()
+
+
+def get_tokenizer() -> Any:
+    """Return the immutable-revision tokenizer, bounded by the init timeout.
+
+    The loader thread is daemonized so timing out does not immediately wait for
+    a stalled network/download call during executor cleanup. Later callers
+    share the same in-flight load rather than spawning duplicate downloads.
     """
 
+    global _tokenizer_load_started
+    if _tokenizer is not None:
+        return _tokenizer
 
-class ClassificationTimeout(PromptGuardError):
-    """Raised when classification exceeds the allowed time budget."""
+    with _tokenizer_lock:
+        if not _tokenizer_load_started:
+            _tokenizer_load_started = True
+            threading.Thread(
+                target=_load_tokenizer_in_background,
+                name="prompt-guard-tokenizer-loader",
+                daemon=True,
+            ).start()
 
+    if not _tokenizer_load_done.wait(PROMPT_GUARD_INIT_TIMEOUT_SECS):
+        raise PromptGuardInitializationError(
+            "Prompt Guard tokenizer loading timed out"
+        )
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ClassificationResult:
-    """Result of classifying a single text chunk.
-
-    Attributes:
-        label: "benign" or "malicious" (Prompt Guard 2 binary output).
-        score: Model confidence in [0, 1].
-        chunk_index: Zero-based index of the chunk within the original text.
-    """
-
-    label: str
-    score: float
-    chunk_index: int
-
-
-# ---------------------------------------------------------------------------
-# Chunking
-# ---------------------------------------------------------------------------
+    if _tokenizer is not None:
+        return _tokenizer
+    raise PromptGuardInitializationError(
+        "Prompt Guard tokenizer failed to load or verify"
+    ) from _tokenizer_error
 
 
 def chunk_text(
@@ -83,210 +112,45 @@ def chunk_text(
     chunk_size: int = PROMPT_GUARD_CHUNK_SIZE,
     overlap: int = PROMPT_GUARD_CHUNK_OVERLAP,
     max_chunks: int = MAX_CHUNK_COUNT,
+    tokenizer: Any | None = None,
 ) -> list[str]:
-    """Divide text into bounded, overlapping chunks by token count.
+    """Divide text into bounded overlapping chunks without truncation."""
 
-    Uses the Prompt Guard model's tokenizer to split text into chunks of at most
-    `chunk_size` tokens, with `overlap` tokens shared between consecutive chunks.
-    The model's context window is 512 tokens — chunk_size defaults to 512.
-    Truncation is PROHIBITED — all text is covered.
-
-    Args:
-        text: The input text to chunk.
-        chunk_size: Maximum number of tokens per chunk (default: 512, the model limit).
-        overlap: Number of overlapping tokens between consecutive chunks.
-        max_chunks: Hard limit on chunk count. Exceeding raises ChunkLimitExceeded.
-
-    Returns:
-        List of text chunks covering the entire input.
-
-    Raises:
-        ChunkLimitExceeded: If the text would produce more than max_chunks chunks.
-        ValueError: If overlap >= chunk_size.
-    """
-    if overlap >= chunk_size:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if overlap < 0 or overlap >= chunk_size:
         raise ValueError(
-            f"overlap ({overlap}) must be less than chunk_size ({chunk_size})"
+            f"overlap ({overlap}) must be non-negative and less than "
+            f"chunk_size ({chunk_size})"
         )
-
+    if max_chunks <= 0:
+        raise ValueError("max_chunks must be positive")
     if not text or not text.strip():
         return [text] if text else []
 
-    tokenizer = _get_tokenizer()
-
-    # Encode without special tokens to get raw token ids
-    token_ids: list[int] = tokenizer.encode(text, add_special_tokens=False)
-
+    active_tokenizer = tokenizer if tokenizer is not None else get_tokenizer()
+    token_ids: list[int] = active_tokenizer.encode(text, add_special_tokens=False)
     if len(token_ids) <= chunk_size:
         return [text]
 
     stride = chunk_size - overlap
     chunks: list[str] = []
     start = 0
-
     while start < len(token_ids):
         end = min(start + chunk_size, len(token_ids))
-        chunk_ids = token_ids[start:end]
-        chunk_text_decoded = tokenizer.decode(chunk_ids, skip_special_tokens=True)
-        chunks.append(chunk_text_decoded)
-
+        chunks.append(
+            active_tokenizer.decode(
+                token_ids[start:end],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        )
+        if len(chunks) > max_chunks:
+            raise ChunkLimitExceeded(
+                f"Text exceeds the configured maximum of {max_chunks} chunks"
+            )
         if end >= len(token_ids):
             break
         start += stride
 
-    if len(chunks) > max_chunks:
-        raise ChunkLimitExceeded(
-            f"Text produced {len(chunks)} chunks, exceeding max_chunks={max_chunks}. "
-            f"Refusing to process — fail closed."
-        )
-
     return chunks
-
-
-# ---------------------------------------------------------------------------
-# Classifier
-# ---------------------------------------------------------------------------
-
-
-class PromptGuardClassifier:
-    """Wrapper around the Prompt Guard 2 86M text-classification pipeline.
-
-    Provides single-text and batch classification, plus a maliciousness check
-    against a configurable confidence threshold.
-
-    Prompt Guard 2 is BINARY: labels are "benign" and "malicious".
-    """
-
-    def __init__(
-        self,
-        model_id: str = PROMPT_GUARD_MODEL_ID,
-        device: str = PROMPT_GUARD_DEVICE,
-        threshold: float = PROMPT_GUARD_THRESHOLD,
-    ) -> None:
-        """Initialize the classifier by loading the model pipeline.
-
-        Args:
-            model_id: HuggingFace model identifier for Prompt Guard 2 86M.
-            device: Torch device string ('cpu', 'cuda', 'mps', etc.).
-            threshold: Score threshold above which "malicious" results block.
-        """
-        self.model_id = model_id
-        self.device = device
-        self.threshold = threshold
-        self._pipeline = pipeline(
-            "text-classification",
-            model=model_id,
-            device=device,
-            torch_dtype=torch.float32,
-            truncation=True,
-            max_length=512,  # Model context window
-        )
-
-    def classify(self, text: str) -> ClassificationResult:
-        """Classify a single text segment.
-
-        Args:
-            text: Input text to classify (must be <= 512 tokens).
-
-        Returns:
-            ClassificationResult with the top label, its score, and chunk_index=0.
-        """
-        results = self._pipeline(text)
-        # pipeline returns a list with one dict: {'label': str, 'score': float}
-        top = results[0]
-        return ClassificationResult(
-            label=top["label"].lower(),
-            score=top["score"],
-            chunk_index=0,
-        )
-
-    def classify_chunks(self, chunks: list[str]) -> list[ClassificationResult]:
-        """Classify multiple text chunks in batch.
-
-        Args:
-            chunks: List of text segments to classify (each <= 512 tokens).
-
-        Returns:
-            List of ClassificationResult, one per chunk, preserving order.
-        """
-        if not chunks:
-            return []
-
-        batch_results = self._pipeline(chunks)
-
-        classification_results: list[ClassificationResult] = []
-        for idx, result in enumerate(batch_results):
-            # Each result is a dict: {'label': str, 'score': float}
-            if isinstance(result, list):
-                # Shouldn't happen with default top_k=1 but defensive
-                result = result[0]
-            classification_results.append(
-                ClassificationResult(
-                    label=result["label"].lower(),
-                    score=result["score"],
-                    chunk_index=idx,
-                )
-            )
-
-        return classification_results
-
-    def is_malicious(self, result: ClassificationResult) -> bool:
-        """Determine if a classification result indicates a malicious prompt.
-
-        A result is malicious if the label is "malicious" AND the confidence
-        score meets or exceeds the threshold.
-
-        Args:
-            result: A ClassificationResult to evaluate.
-
-        Returns:
-            True if classified as malicious with sufficient confidence.
-        """
-        return result.label == "malicious" and result.score >= self.threshold
-
-
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-
-_classifier: Optional[PromptGuardClassifier] = None
-_classifier_lock = threading.Lock()
-_tokenizer: Optional[AutoTokenizer] = None
-_tokenizer_lock = threading.Lock()
-
-
-def get_classifier() -> PromptGuardClassifier:
-    """Get or create the module-level PromptGuardClassifier singleton.
-
-    Thread-safe lazy initialization using config values from guardrails.config.
-
-    Returns:
-        The shared PromptGuardClassifier instance.
-    """
-    global _classifier
-    if _classifier is None:
-        with _classifier_lock:
-            if _classifier is None:
-                _classifier = PromptGuardClassifier(
-                    model_id=PROMPT_GUARD_MODEL_ID,
-                    device=PROMPT_GUARD_DEVICE,
-                    threshold=PROMPT_GUARD_THRESHOLD,
-                )
-    return _classifier
-
-
-def _get_tokenizer() -> AutoTokenizer:
-    """Get or create the module-level tokenizer singleton for chunking.
-
-    Uses the same model_id as the classifier to ensure token counts align
-    with the model's actual vocabulary.
-
-    Returns:
-        The shared AutoTokenizer instance.
-    """
-    global _tokenizer
-    if _tokenizer is None:
-        with _tokenizer_lock:
-            if _tokenizer is None:
-                _tokenizer = AutoTokenizer.from_pretrained(PROMPT_GUARD_MODEL_ID)
-    return _tokenizer

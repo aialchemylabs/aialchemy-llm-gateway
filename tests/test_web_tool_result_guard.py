@@ -16,7 +16,11 @@ from unittest.mock import AsyncMock
 # Mock litellm before importing the guard.
 import tests.conftest_guardrails  # noqa: F401
 
-from guardrails.config import WEB_TOOL_ALLOWLIST
+from guardrails.config import (
+    MAX_TOOL_OUTPUT_PARTS,
+    PROMPT_GUARD_MAX_RESULT_BYTES,
+    WEB_TOOL_ALLOWLIST,
+)
 from guardrails.presidio_client import PresidioError
 from guardrails.web_tool_result_guard import AiAlchemyWebToolResultGuard
 
@@ -33,7 +37,7 @@ def make_guard():
     guard._prompt_guard = AsyncMock()
     guard._prompt_guard.classify = AsyncMock(return_value=False)
     # Stub token chunking: one chunk, no tokenizer needed.
-    guard._chunk_text = lambda text: [text] if text else []
+    guard._chunk_text = AsyncMock(side_effect=lambda text: [text] if text else [])
     return guard
 
 
@@ -242,6 +246,40 @@ class TestCallIdProvenance(unittest.TestCase):
 
         self.assertIn("cannot map call_id", str(ctx.exception))
 
+    def test_duplicate_function_call_id_fails_closed(self):
+        """A later non-web name must not overwrite web provenance and bypass scanning."""
+        request_data = {
+            "input": [
+                {"type": "function_call", "call_id": "dup", "name": "web_search"},
+                {"type": "function_call", "call_id": "dup", "name": "calculator"},
+                {"type": "function_call_output", "call_id": "dup", "output": "web data"},
+            ]
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs={}, request_data=request_data, input_type="request"
+                )
+            )
+
+        self.assertIn("duplicate", str(ctx.exception).lower())
+
+    def test_non_string_call_id_fails_closed(self):
+        request_data = {
+            "input": [
+                {"type": "function_call", "call_id": 123, "name": "web_search"},
+                {"type": "function_call_output", "call_id": 123, "output": "web data"},
+            ]
+        }
+
+        with self.assertRaises(RuntimeError):
+            run(
+                self.guard.apply_guardrail(
+                    inputs={}, request_data=request_data, input_type="request"
+                )
+            )
+
 
 class TestStructuredOutput(unittest.TestCase):
     """browser_vision and friends may return non-string output."""
@@ -261,10 +299,12 @@ class TestStructuredOutput(unittest.TestCase):
                 )
             )
 
-        self.assertIn("unexpected output type", str(ctx.exception))
+        self.assertIn("unexpected function_call_output type", str(ctx.exception))
 
     def test_list_of_text_parts_is_scanned(self):
-        self.guard._presidio.analyze_and_anonymize = AsyncMock(return_value="masked")
+        self.guard._presidio.analyze_and_anonymize = AsyncMock(
+            side_effect=lambda text: f"masked:{text}"
+        )
         request_data = {
             "input": tool_call_pair(
                 "browser_vision",
@@ -279,7 +319,32 @@ class TestStructuredOutput(unittest.TestCase):
         )
 
         self.guard._prompt_guard.classify.assert_called()
-        self.assertEqual(request_data["input"][1]["output"], "masked")
+        self.assertEqual(
+            request_data["input"][1]["output"],
+            [
+                {"type": "text", "text": "masked:a caption"},
+                "masked:plain string",
+            ],
+            "masking must preserve the Responses structured output shape",
+        )
+
+    def test_result_over_raw_size_limit_fails_before_presidio(self):
+        request_data = {
+            "input": tool_call_pair(
+                "web_extract", output="x" * (PROMPT_GUARD_MAX_RESULT_BYTES + 1)
+            )
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs={}, request_data=request_data, input_type="request"
+                )
+            )
+
+        self.assertIn("size limit", str(ctx.exception))
+        self.guard._presidio.analyze_and_anonymize.assert_not_called()
+        self.guard._prompt_guard.classify.assert_not_called()
 
     def test_list_with_non_scannable_part_fails_closed(self):
         request_data = {
@@ -309,6 +374,23 @@ class TestStructuredOutput(unittest.TestCase):
                     inputs={}, request_data=request_data, input_type="request"
                 )
             )
+
+    def test_too_many_zero_byte_parts_fails_closed(self):
+        request_data = {
+            "input": tool_call_pair(
+                "web_extract", output=[""] * (MAX_TOOL_OUTPUT_PARTS + 1)
+            )
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run(
+                self.guard.apply_guardrail(
+                    inputs={}, request_data=request_data, input_type="request"
+                )
+            )
+
+        self.assertIn("part", str(ctx.exception).lower())
+        self.guard._presidio.analyze_and_anonymize.assert_not_called()
 
 
 class TestFailClosed(unittest.TestCase):

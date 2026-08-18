@@ -20,6 +20,22 @@ class CustomGuardrail:
             setattr(self, key, value)
 
 
+class GuardrailRaisedException(Exception):
+    """Minimal stand-in carrying LiteLLM's stable HTTP status contract."""
+
+    def __init__(
+        self,
+        guardrail_name=None,
+        message="",
+        should_wrap_with_default_message=True,
+        status_code=400,
+    ):
+        self.guardrail_name = guardrail_name
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
 def _install_litellm_stub() -> None:
     """Register fake litellm modules in sys.modules (idempotent)."""
     if "litellm.integrations.custom_guardrail" in sys.modules:
@@ -28,14 +44,17 @@ def _install_litellm_stub() -> None:
     litellm = ModuleType("litellm")
     integrations = ModuleType("litellm.integrations")
     custom_guardrail = ModuleType("litellm.integrations.custom_guardrail")
+    exceptions = ModuleType("litellm.exceptions")
 
     custom_guardrail.CustomGuardrail = CustomGuardrail
+    exceptions.GuardrailRaisedException = GuardrailRaisedException
     integrations.custom_guardrail = custom_guardrail
     litellm.integrations = integrations
 
     sys.modules["litellm"] = litellm
     sys.modules["litellm.integrations"] = integrations
     sys.modules["litellm.integrations.custom_guardrail"] = custom_guardrail
+    sys.modules["litellm.exceptions"] = exceptions
 
 
 _install_litellm_stub()

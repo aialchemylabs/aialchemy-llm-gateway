@@ -23,6 +23,11 @@ from typing import Any, Literal, Optional
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from guardrails.presidio_client import PresidioClient, PresidioError
+from guardrails.responses_tool_output import (
+    ToolOutputShapeError,
+    collect_text_parts,
+    replace_text_parts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +117,31 @@ class AiAlchemyPiiInputGuard(CustomGuardrail):
                 continue
             if item.get("type") != "function_call_output":
                 continue
-            output = item.get("output")
-            if isinstance(output, str) and output.strip():
-                item["output"] = await self._anonymize_text(output)
+            output = item.get("output", "")
+            try:
+                text_parts = collect_text_parts(output)
+            except ToolOutputShapeError as exc:
+                logger.error(
+                    "pii-input-guard: non-scannable function_call_output — blocking"
+                )
+                raise RuntimeError(
+                    f"PII input guard: non-scannable function_call_output — "
+                    "request blocked"
+                ) from exc
+
+            masked_parts = [
+                await self._anonymize_text(part.text) if part.text else part.text
+                for part in text_parts
+            ]
+            try:
+                item["output"] = replace_text_parts(
+                    output, text_parts, masked_parts
+                )
+            except ToolOutputShapeError as exc:
+                raise RuntimeError(
+                    "PII input guard: function_call_output changed during rewrite — "
+                    "request blocked"
+                ) from exc
 
     async def _anonymize_text(self, text: str) -> str:
         """Run Presidio analysis and anonymization on a single text.

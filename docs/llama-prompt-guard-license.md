@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Model:** `meta-llama/Llama-Prompt-Guard-2-86M`  
 **License:** Llama 4 Community License Agreement (effective April 5, 2025)  
-**Spec reference:** must-have-requirements.md §7.2  
+**Implementation:** `guardrails/config.py` and `guardrails/prompt_guard_client.py`
 
 ## License Summary
 
@@ -51,16 +51,18 @@ not the older Llama 2 Community License. The model page explicitly states
 ## Model Pinning (§7.1)
 
 The exact model revision and artifacts MUST be pinned and integrity-checked
-at deployment time. The `PROMPT_GUARD_MODEL_ID` config value points to
-`meta-llama/Llama-Prompt-Guard-2-86M`. A specific commit SHA should be
-pinned in production configuration:
+at deployment time. `guardrails/config.py` pins
+`meta-llama/Llama-Prompt-Guard-2-86M` to the immutable Hugging Face revision:
 
 ```
-PROMPT_GUARD_MODEL_REVISION=<commit-sha-from-huggingface>
+PROMPT_GUARD_MODEL_REVISION=a8ded8e697ce7c355e395a0df51f94adb4a2fd27
 ```
 
-This ensures reproducibility and prevents supply-chain attacks via model
-weight replacement on the HuggingFace Hub.
+The runtime downloads the tokenizer snapshot at that revision, verifies the
+resolved snapshot identity, loads it locally, requests the model at the same
+revision, and rejects a model whose reported commit differs. Changing the
+model revision is a reviewed source change rather than a runtime environment
+override.
 
 ## If We Ship Weights in a Docker Image
 

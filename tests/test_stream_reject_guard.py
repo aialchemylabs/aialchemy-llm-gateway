@@ -5,12 +5,12 @@ Until buffered re-emission is proven, client streaming is rejected outright —
 never silently coerced to non-streaming and never fake-streamed.
 """
 import asyncio
-import importlib
 import unittest
 
 # Mock litellm before importing the guard.
 import tests.conftest_guardrails  # noqa: F401
 
+from litellm.exceptions import GuardrailRaisedException
 from guardrails.stream_reject_guard import AiAlchemyStreamRejectGuard
 
 
@@ -24,7 +24,7 @@ class TestStreamRejectGuard(unittest.TestCase):
 
     def test_stream_true_is_rejected(self):
         """stream=True must raise so LiteLLM returns a stable 4xx."""
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(GuardrailRaisedException) as ctx:
             run(
                 self.guard.apply_guardrail(
                     inputs={},
@@ -34,6 +34,7 @@ class TestStreamRejectGuard(unittest.TestCase):
             )
 
         self.assertIn("Streaming is not supported", str(ctx.exception))
+        self.assertEqual(ctx.exception.status_code, 400)
 
     def test_stream_false_passes(self):
         inputs = {"texts": []}
@@ -59,7 +60,7 @@ class TestStreamRejectGuard(unittest.TestCase):
         """The guard must NOT rewrite stream to False — it must reject."""
         request_data = {"stream": True}
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(GuardrailRaisedException):
             run(
                 self.guard.apply_guardrail(
                     inputs={}, request_data=request_data, input_type="request"
@@ -82,34 +83,5 @@ class TestStreamRejectGuard(unittest.TestCase):
             )
         )
         self.assertEqual(result, inputs)
-
-
-class TestStreamRejectDisabled(unittest.TestCase):
-    """The kill switch allows staged rollout without editing code."""
-
-    def test_disabled_config_passes_stream(self):
-        import guardrails.config as config
-        import guardrails.stream_reject_guard as guard_module
-
-        original = config.STREAM_REJECTION_ENABLED
-        try:
-            config.STREAM_REJECTION_ENABLED = False
-            importlib.reload(guard_module)
-            guard = guard_module.AiAlchemyStreamRejectGuard()
-
-            inputs = {"texts": []}
-            result = run(
-                guard.apply_guardrail(
-                    inputs=inputs,
-                    request_data={"stream": True},
-                    input_type="request",
-                )
-            )
-            self.assertEqual(result, inputs)
-        finally:
-            config.STREAM_REJECTION_ENABLED = original
-            importlib.reload(guard_module)
-
-
 if __name__ == "__main__":
     unittest.main()

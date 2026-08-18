@@ -69,6 +69,13 @@ class GuardrailConfigTests(unittest.TestCase):
         config = self._import_config()
         self.assertEqual(config.PROMPT_GUARD_MODEL, "meta-llama/Llama-Prompt-Guard-2-86M")
 
+    def test_prompt_guard_model_revision_is_pinned(self) -> None:
+        """The gated model must resolve through an immutable commit, never main."""
+        config = self._import_config()
+        revision = config.PROMPT_GUARD_MODEL_REVISION
+        self.assertEqual(len(revision), 40)
+        self.assertTrue(all(char in "0123456789abcdef" for char in revision))
+
     def test_prompt_guard_threshold_default(self) -> None:
         """Classification threshold is a finite float between 0 and 1."""
         config = self._import_config()
@@ -82,6 +89,15 @@ class GuardrailConfigTests(unittest.TestCase):
             config = self._import_config()
             self.assertEqual(config.PROMPT_GUARD_THRESHOLD, 0.85)
 
+    def test_invalid_threshold_fails_startup(self) -> None:
+        """A malformed threshold must not turn every malicious score into allow."""
+        for bad in ("nan", "-0.1", "1.1"):
+            with self.subTest(value=bad), patch.dict(
+                os.environ, {"PROMPT_GUARD_THRESHOLD": bad}
+            ):
+                with self.assertRaises(ValueError):
+                    self._import_config()
+
     def test_chunk_size_default(self) -> None:
         """Chunk size has a finite positive default."""
         config = self._import_config()
@@ -93,6 +109,15 @@ class GuardrailConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"PROMPT_GUARD_CHUNK_SIZE": "384"}):
             config = self._import_config()
             self.assertEqual(config.PROMPT_GUARD_CHUNK_SIZE, 384)
+
+    def test_chunk_size_cannot_consume_special_token_budget(self) -> None:
+        """At most 510 content tokens fit beside the two classifier tokens."""
+        for bad in ("0", "511", "512"):
+            with self.subTest(value=bad), patch.dict(
+                os.environ, {"PROMPT_GUARD_CHUNK_SIZE": bad}
+            ):
+                with self.assertRaises(ValueError):
+                    self._import_config()
 
     def test_chunk_overlap_default(self) -> None:
         """Chunk overlap has a finite non-negative default less than chunk size."""
@@ -119,6 +144,18 @@ class GuardrailConfigTests(unittest.TestCase):
             config = self._import_config()
             self.assertEqual(config.PROMPT_GUARD_MAX_CHUNKS, 20)
 
+    def test_max_result_bytes_default(self) -> None:
+        """Raw web results have a separate finite limit before tokenization."""
+        config = self._import_config()
+        self.assertIsInstance(config.PROMPT_GUARD_MAX_RESULT_BYTES, int)
+        self.assertGreater(config.PROMPT_GUARD_MAX_RESULT_BYTES, 0)
+
+    def test_max_structured_parts_default(self) -> None:
+        """A zero-byte structured result cannot create an unbounded part list."""
+        config = self._import_config()
+        self.assertIsInstance(config.MAX_TOOL_OUTPUT_PARTS, int)
+        self.assertGreater(config.MAX_TOOL_OUTPUT_PARTS, 0)
+
     def test_prompt_guard_timeout_default(self) -> None:
         """Prompt Guard timeout has a finite positive default."""
         config = self._import_config()
@@ -144,6 +181,27 @@ class GuardrailConfigTests(unittest.TestCase):
         config = self._import_config()
         for tool_name in ("web_search", "web_extract"):
             self.assertIn(tool_name, config.WEB_TOOL_ALLOWLIST)
+
+    def test_web_tool_allowlist_env_is_authoritative(self) -> None:
+        """Core Infra can supply the reviewed deployed-tool manifest."""
+        with patch.dict(
+            os.environ,
+            {"WEB_TOOL_ALLOWLIST": "web_search,browser_snapshot"},
+        ):
+            config = self._import_config()
+            self.assertEqual(
+                config.WEB_TOOL_ALLOWLIST,
+                frozenset({"web_search", "browser_snapshot"}),
+            )
+
+    def test_invalid_web_tool_allowlist_fails_startup(self) -> None:
+        """An empty, ambiguous, or malformed deployment manifest cannot run."""
+        for bad in ("", "web_search,", "web_search,web_search", "web/search"):
+            with self.subTest(value=bad), patch.dict(
+                os.environ, {"WEB_TOOL_ALLOWLIST": bad}
+            ):
+                with self.assertRaises(ValueError):
+                    self._import_config()
 
     # --- Presidio entities ---
 

@@ -1,8 +1,8 @@
 """AiAlchemy Stream Reject Guard — blocks streaming on protected routes.
 
 Pipeline position: pre_call (earliest reject possible).
-Raises RuntimeError immediately if stream=True, giving the caller a clear
-error rather than silently coercing or fake-streaming the response.
+Raises a stable HTTP-400 guardrail exception immediately if stream=True,
+rather than silently coercing or fake-streaming the response.
 """
 
 from __future__ import annotations
@@ -10,9 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal, Optional
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
-
-from guardrails.config import STREAM_REJECTION_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +31,15 @@ class AiAlchemyStreamRejectGuard(CustomGuardrail):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Reject if stream is True; pass through otherwise."""
-        if not STREAM_REJECTION_ENABLED:
-            return inputs
-
         if request_data.get("stream") is True:
-            raise RuntimeError(
-                "Streaming is not supported on the protected route. "
-                "Set stream: false."
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=(
+                    "Streaming is not supported on the protected route. "
+                    "Set stream: false."
+                ),
+                should_wrap_with_default_message=False,
+                status_code=400,
             )
 
         return inputs

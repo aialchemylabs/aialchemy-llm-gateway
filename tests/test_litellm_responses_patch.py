@@ -10,9 +10,8 @@ The upstream signature verified in the image build is:
 
 Both meaningful parameters are positional-or-keyword with no default, so LiteLLM
 may pass them either way. A wrapper that reads only kwargs resolves the
-guardrail to None on a positional call and skips inspection silently — the exact
-bypass must-have-requirements.md §4.3 prohibits. Every invocation style is
-therefore exercised here.
+guardrail to None on a positional call and skips inspection silently. Every
+invocation style is therefore exercised here to prevent that bypass.
 """
 import asyncio
 import sys
@@ -49,6 +48,16 @@ class FakeHandler:
         self, data, guardrail_to_apply, litellm_logging_obj=None
     ):
         self.upstream_calls += 1
+        input_items = data.get("input")
+        if isinstance(input_items, list) and any(
+            isinstance(item, dict) and "content" in item for item in input_items
+        ):
+            await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": ["message text"]},
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
+            )
         return data
 
 
@@ -158,7 +167,12 @@ class TestGuardrailInvocation(ResponsesPatchTestBase):
         self.assertEqual(len(self.guardrail.calls), 1)
 
     def test_mixed_call_invokes_guardrail(self):
-        data = {"input": list(TOOL_ONLY_INPUT)}
+        data = {
+            "input": [
+                {"role": "user", "content": "continue"},
+                *TOOL_ONLY_INPUT,
+            ]
+        }
 
         run(
             self.handler.process_input_messages(
@@ -166,7 +180,11 @@ class TestGuardrailInvocation(ResponsesPatchTestBase):
             )
         )
 
-        self.assertEqual(len(self.guardrail.calls), 1)
+        self.assertEqual(
+            len(self.guardrail.calls),
+            1,
+            "the wrapper must not invoke a guardrail twice when upstream already ran it",
+        )
 
     def test_guardrail_receives_the_raw_request(self):
         """The guard reads function_call_output from request_data, so the raw
@@ -204,7 +222,7 @@ class TestNoDuplicateOrSpuriousInvocation(ResponsesPatchTestBase):
 
         run(self.handler.process_input_messages(data, self.guardrail))
 
-        self.assertEqual(len(self.guardrail.calls), 0)
+        self.assertEqual(len(self.guardrail.calls), 1)
 
     def test_empty_input_is_not_inspected(self):
         run(self.handler.process_input_messages({"input": []}, self.guardrail))
