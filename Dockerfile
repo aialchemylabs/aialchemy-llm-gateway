@@ -124,6 +124,20 @@ COPY scripts/verify_litellm_streaming_contract.py /tmp/verify_litellm_streaming_
 RUN python /tmp/verify_litellm_streaming_contract.py \
  && rm /tmp/verify_litellm_streaming_contract.py
 
+# LiteLLM's embedding() dispatcher never inspects a provider segment in a
+# huggingface/<provider>/<org>/<model> model string — it hard-codes the
+# hf-inference router route for every huggingface/* embedding call, silently
+# ignoring providers such as Scaleway (upstream gap:
+# https://github.com/BerriAI/litellm/issues/34503; the open fix at
+# https://github.com/BerriAI/litellm/pull/34540 only helps the direct-Scaleway
+# -key path, not the HF-token-routed path this project requires). Route the
+# provider segment through the same provider-mapping lookup completion()
+# already uses, so huggingface/scaleway/... embeddings actually reach
+# Scaleway via the HF router with the existing HF_TOKEN.
+COPY scripts/patch_litellm_huggingface_embedding_provider_routing.py /tmp/patch_litellm_huggingface_embedding_provider_routing.py
+RUN python /tmp/patch_litellm_huggingface_embedding_provider_routing.py \
+ && rm /tmp/patch_litellm_huggingface_embedding_provider_routing.py
+
 # Smoke imports at build time. This catches upstream-extra regressions and
 # verifies the callback dependency that LiteLLM imports at proxy startup.
 RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
@@ -184,6 +198,12 @@ print(f'  presidio entities: {len(PRESIDIO_ENTITIES)} configured'); \
 # LiteLLM for isolation; this gate proves final assistant text is rewritten and
 # neighboring function-call structure is preserved by the installed release.
 RUN python scripts/verify_responses_output_guard_contract.py
+
+# Exercise the real pinned, already-patched LiteLLM Hugging Face embedding
+# handler. Unit tests stub the provider-mapping lookup for isolation; this
+# gate proves provider selection, request route, auth source, and response
+# transformation against the actual installed release.
+RUN python scripts/verify_huggingface_embedding_provider_routing_contract.py
 
 # EXECUTE the behavioural test suite. Importing the modules is not evidence —
 # these tests are what prove the fail-closed contracts (PII masking reaches the
