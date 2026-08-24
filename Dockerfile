@@ -37,6 +37,15 @@ ENV UV_LINK_MODE=copy \
     PYTHONPATH=/app
 RUN uv pip install --system --no-cache -r /app/requirements.txt
 
+# LiteLLM's open-source custom-auth hook exists in 1.97.0, but its centralized
+# authorization and MCP paths have three gaps for a resource-server bearer:
+# custom auth can be mistaken for no-auth mode, delegated MCP can bypass it,
+# and the admission bearer can reach MCP egress. Apply the fail-closed patch
+# before importing the proxy.
+COPY scripts/patch_litellm_workos_custom_auth.py /tmp/patch_litellm_workos_custom_auth.py
+RUN python /tmp/patch_litellm_workos_custom_auth.py \
+ && rm /tmp/patch_litellm_workos_custom_auth.py
+
 # LiteLLM 1.97.0's Responses health probe passes a bare string to
 # `aresponses`, while the ChatGPT subscription adapter requires canonical
 # list input. Apply a fail-closed source patch until upstream ships the fix.
@@ -138,9 +147,14 @@ COPY scripts/patch_litellm_huggingface_embedding_provider_routing.py /tmp/patch_
 RUN python /tmp/patch_litellm_huggingface_embedding_provider_routing.py \
  && rm /tmp/patch_litellm_huggingface_embedding_provider_routing.py
 
+# Bundle the WorkOS custom-auth implementation. Runtime configuration imports
+# aialchemy_auth.runtime.workos_auth; that import validates every required
+# issuer/resource/permission setting before the proxy starts serving.
+COPY aialchemy_auth/ /app/aialchemy_auth/
+
 # Smoke imports at build time. This catches upstream-extra regressions and
 # verifies the callback dependency that LiteLLM imports at proxy startup.
-RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
+RUN python -c "import litellm.proxy.proxy_server; import prometheus_client; import aialchemy_auth.workos"
 
 # Copy the AiAlchemy guardrails package and its tests into the image.
 # scripts/ is included because the patch regression tests load each patch
@@ -198,6 +212,11 @@ print(f'  presidio entities: {len(PRESIDIO_ENTITIES)} configured'); \
 # LiteLLM for isolation; this gate proves final assistant text is rewritten and
 # neighboring function-call structure is preserved by the installed release.
 RUN python scripts/verify_responses_output_guard_contract.py
+
+# Assert the installed LiteLLM source exposes the server-only WorkOS marker,
+# enforces common checks without relying on a master key, routes MCP through
+# WorkOS custom auth, and scrubs the admission bearer before MCP egress.
+RUN python scripts/verify_workos_auth_contract.py
 
 # Exercise the real pinned, already-patched LiteLLM Hugging Face embedding
 # handler. Unit tests stub the provider-mapping lookup for isolation; this

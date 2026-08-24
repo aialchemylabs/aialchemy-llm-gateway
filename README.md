@@ -24,18 +24,76 @@ This image takes the upstream `litellm[proxy]` release and adds:
 
 Except for the documented compatibility patches, the LiteLLM proxy is the same source release as `pip install litellm[proxy]==X.Y.Z`. Provider configuration, model routing, and feature flags remain upstream's surface. See [LiteLLM's docs](https://docs.litellm.ai/docs/proxy/configs) for `config.yaml` details.
 
+## WorkOS Connect authentication
+
+The image includes an open-source LiteLLM `custom_auth` implementation for
+WorkOS Connect access tokens; no LiteLLM Enterprise licence is required. It
+accepts exactly one `Authorization: Bearer` credential and validates an RS256
+signature from the pinned WorkOS JWKS endpoint, exact issuer, scalar resource
+audience, expiry/time claims, exact AI Alchemy organization, and a non-empty
+subject. WorkOS Connect access tokens do not document client-ID or scope claims,
+so this resource server deliberately does not invent or require them.
+
+Configure the runtime-mounted LiteLLM YAML with:
+
+```yaml
+litellm_settings:
+  enable_post_custom_auth_checks: true
+
+general_settings:
+  custom_auth: aialchemy_auth.runtime.workos_auth
+  custom_auth_run_common_checks: true
+  allow_requests_on_db_unavailable: false
+```
+
+All three settings are required. The image patch treats custom auth as an
+authenticated mode even when `master_key` is absent, forces every non-metadata
+MCP request through WorkOS admission, removes the WorkOS bearer before MCP
+egress, and leaves only liveness probes publicly accessible. Model routes, MCP
+servers/access groups, and MCP tools are explicit runtime allowlists shared by
+Jarvis and Copilot.
+
+The current shared AI Alchemy `WORKOS_ALLOWED_MODELS` catalog contains these
+exact twelve routes:
+
+```text
+gemini/gemini-3.5-flash
+gemini/gemini-3.5-flash-lite
+gemini/gemini-3.6-flash
+gemini/gemini-embedding-2
+gemini/gemini-3.1-flash-image
+chatgpt/gpt-5.6-sol
+chatgpt/gpt-5.6-terra
+chatgpt/gpt-5.6-luna
+cohere/rerank-v4.0-fast
+qwen/qwen3-embedding-8b
+mistral/mistral-ocr-latest
+mistral/mistral-ocr-4
+```
+
+Custom auth does not hardcode that catalog: it preserves the exact non-empty
+comma-separated runtime allowlist. Both clients therefore receive the same
+configured catalog without relying on client-ID claims, OAuth scopes, access
+groups, or virtual keys.
+
+A WorkOS-provided issuer such as `https://<project>.authkit.app` is supported;
+the paid WorkOS custom-domain option is not required. The resource audience
+remains the AI Alchemy LiteLLM/MCP HTTPS URL.
+
 ## Pull and run
 
 ```bash
 docker run --rm \
-  -e LITELLM_MASTER_KEY=sk-your-key \
-  -e OPENAI_API_KEY=sk-your-openai-key \
+  --env-file ./gateway.env \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 4000:4000 \
   ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.97.0
 ```
 
-Config is never baked into the image. Mount your `config.yaml` at `/app/config.yaml` at runtime. All provider API keys are injected via environment variables.
+Config is never baked into the image. Mount your `config.yaml` at
+`/app/config.yaml` at runtime. `gateway.env` supplies the WorkOS settings and
+provider credentials; the WorkOS-only data plane does not configure a LiteLLM
+master key or issue virtual keys.
 
 ## Runtime model support
 
@@ -45,13 +103,15 @@ For the AI Alchemy local stack, the mounted config lives in `core-infra/llm-gate
 
 ### Gemini routing and streaming
 
-The image routes an exact Gemini model through LiteLLM when the runtime-mounted `config.yaml` includes that model or a `gemini/*` wildcard and the container has `GEMINI_API_KEY` set:
+The image routes an exact Gemini model through LiteLLM when the runtime-mounted
+`config.yaml` includes that exact model and the container has `GEMINI_API_KEY`
+set:
 
 ```yaml
 model_list:
-  - model_name: gemini/*
+  - model_name: gemini/gemini-3.6-flash
     litellm_params:
-      model: gemini/*
+      model: gemini/gemini-3.6-flash
       api_key: os.environ/GEMINI_API_KEY
 ```
 
@@ -61,9 +121,16 @@ When a client requests streaming, LiteLLM maps the request to Google's `streamGe
 
 | Var | Purpose | Notes |
 |---|---|---|
-| `LITELLM_MASTER_KEY` | Auth header for every gateway call + admin UI login | Required |
+| `WORKOS_ISSUER` | Exact WorkOS AuthKit issuer | May use the WorkOS-provided `*.authkit.app` domain |
+| `WORKOS_JWKS_URL` | WorkOS signing keys | Must be the issuer-origin `/oauth2/jwks` URL |
+| `WORKOS_AUDIENCE` | Exact LiteLLM/MCP resource indicator | Must match the token's scalar `aud` claim |
+| `WORKOS_ORG_ID` | Exact AI Alchemy WorkOS organization | Required |
+| `WORKOS_ALLOWED_MODELS` | Comma-separated common model allowlist | Required and non-empty |
+| `WORKOS_MCP_SERVERS` | Comma-separated common MCP server allowlist | At least this or `WORKOS_MCP_ACCESS_GROUPS` is required |
+| `WORKOS_MCP_ACCESS_GROUPS` | Comma-separated common MCP access groups | Optional when servers are listed directly |
+| `WORKOS_MCP_TOOL_PERMISSIONS_JSON` | Server-to-tool allowlist JSON | Required and non-empty |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, … | Provider API keys referenced from `config.yaml` | Required for the providers you list |
-| `DATABASE_URL` | Postgres connection string | Required for spend logs, virtual keys, admin UI auth |
+| `DATABASE_URL` | Postgres connection string | Required for spend logs and persisted MCP registrations |
 | `STORE_MODEL_IN_DB` | `"True"` to allow runtime model edits via the UI | Requires `DATABASE_URL` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector URL | e.g. `http://otel-collector:4318` |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | **`otlp_http`** or `otlp_grpc` | LiteLLM treats this as the exporter NAME, **not** the OTEL-spec wire format. Setting it to `http/protobuf` (the OTEL standard value) silently disables the exporter. |
@@ -89,9 +156,13 @@ docker buildx build \
   --tag aialchemy-llm-gateway:local \
   --load \
   .
+
+./scripts/run_workos_container_e2e.py --image aialchemy-llm-gateway:local
 ```
 
 The `linux/arm64` build runs the `prisma generate` step under qemu emulation if you're on amd64; that step takes longer (a few minutes) than the rest of the image combined.
+The container probe generates one-use local JWT/TLS material, exercises the
+running proxy over HTTP, and removes its development container on exit.
 
 ## Verify provenance
 
