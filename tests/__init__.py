@@ -1,2 +1,1 @@
-# Test package. Present so `import tests.conftest_guardrails` resolves, which
-# installs the litellm mock before any guardrails module is imported.
+# Regression tests for the LiteLLM compatibility patches retained in the image.

@@ -24,8 +24,8 @@ NEW_BLOCK = '''        is_stream_request: Final = bool(stream)
             response_api_optional_request_params.get("stream", False)
         ):
             # ChatGPT requires upstream SSE even for a non-streaming client.
-            # Buffer that provider response so post-call/output guardrails run
-            # before any final text is returned to the caller.
+            # Buffer that provider response so LiteLLM can assemble and
+            # transform the complete response before returning it.
             is_stream_request = False
         if is_stream_request and fake_stream is True:
 '''

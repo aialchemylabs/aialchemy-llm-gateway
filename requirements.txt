@@ -1,9 +1,8 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.97.0 (latest official GitHub/PyPI stable release
-# as of 2026-08-17; released 2026-08-16).
-# Rationale: tracks upstream stable for latest fixes while keeping this image
-# aligned with the official LiteLLM release cadence.
-# Revisit on every Dependabot PR against this file.
+# Chosen: 1.97.0, the currently validated AI Alchemy gateway release.
+# This is an intentional stability pin, not a claim that 1.97.0 is always the
+# newest upstream release. Upgrade only through a reviewed build and semantic
+# ChatGPT subscription/Hugging Face routing validation.
 litellm[proxy]==1.97.0
 
 # FastAPI — pinned to work around an upstream LiteLLM bug, NOT a preference.
@@ -41,14 +40,3 @@ opentelemetry-exporter-otlp-proto-http==1.31.1
 # additionally runs `prisma generate` against LiteLLM's schema.prisma to
 # bake the engine binaries into the image.
 prisma==0.11.0
-
-# --- AiAlchemy Guardrail Dependencies ---
-
-# Prompt Guard 2 86M: in-process mDeBERTa-v3 classifier for prompt injection
-# detection. Loaded via transformers pipeline in the custom LiteLLM guardrail.
-# Per §7.4: SHOULD load in-process (no sidecar). torch is the inference backend.
-torch==2.7.1
-transformers==4.52.4
-
-# HTTP client for calling self-hosted Presidio Analyzer/Anonymizer services.
-httpx==0.28.1
