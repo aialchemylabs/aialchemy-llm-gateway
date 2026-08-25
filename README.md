@@ -34,6 +34,12 @@ LiteLLM is private infrastructure. It must be reachable only by approved
 applications on the backend network and must not be exposed through a public
 Cloudflare Tunnel or other public ingress.
 
+The image includes LiteLLM's Admin UI as a supported private administrative
+surface. Deployment infrastructure may enable it with
+`DISABLE_ADMIN_UI=false` only when the listener remains loopback-bound or
+backend-only. Administrators authenticate with the runtime-mounted master key;
+the key must never be delivered to application browsers or public ingress.
+
 Jarvis and other trusted applications authenticate with server-held LiteLLM
 virtual keys. Jarvis may use one virtual key for its approved model catalogue;
 each other application should receive a separate key for independent rotation,
