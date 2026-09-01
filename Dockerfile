@@ -6,6 +6,16 @@ FROM ghcr.io/astral-sh/uv:0.8.11 AS uv
 
 FROM python:3.13-slim AS runtime
 
+ARG IMAGE_VERSION=unknown
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="AI Alchemy LLM Gateway" \
+      org.opencontainers.image.description="Multi-architecture LiteLLM gateway with AI Alchemy compatibility patches" \
+      org.opencontainers.image.source="https://github.com/aialchemylabs/aialchemy-llm-gateway" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="$IMAGE_VERSION" \
+      org.opencontainers.image.revision="$VCS_REF"
+
 # curl supports the container health check. Node.js and libatomic1 support the
 # Prisma client used by LiteLLM's database-backed proxy features.
 RUN apt-get update \

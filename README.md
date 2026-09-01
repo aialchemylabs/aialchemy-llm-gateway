@@ -6,7 +6,7 @@ image so upgrades happen only when `requirements.txt` is reviewed and changed.
 
 ## Current image contract
 
-The image currently pins `litellm[proxy]==1.97.0` on `python:3.13-slim` and
+The image currently pins `litellm[proxy]==1.99.0` on `python:3.13-slim` and
 adds the runtime dependencies needed for metrics, tracing, and database-backed
 proxy features.
 
@@ -63,7 +63,7 @@ docker run --rm \
   -e LITELLM_MASTER_KEY=sk-replace-at-runtime \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 127.0.0.1:4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.97.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.99.0
 ```
 
 The loopback bind in this example is intentional. Production networking is
@@ -96,7 +96,8 @@ responses in a deployed environment.
 ## Image publication
 
 CI publishes signed multi-architecture images for `linux/amd64` and
-`linux/arm64` with provenance and an SBOM.
+`linux/arm64` with provenance, an SBOM, and OCI `version` and `revision`
+labels. CI verifies both labels on every published platform image.
 
 | Tag | Meaning |
 |---|---|

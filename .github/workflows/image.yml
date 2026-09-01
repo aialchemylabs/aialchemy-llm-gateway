@@ -61,6 +61,9 @@ jobs:
           push: true
           provenance: true
           sbom: true
+          build-args: |
+            IMAGE_VERSION=${{ steps.version.outputs.version }}
+            VCS_REF=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}-${{ github.sha }}
@@ -83,6 +86,8 @@ jobs:
           set -euo pipefail
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           TAG="v${{ steps.version.outputs.version }}"
+          EXPECTED_VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_REVISION="${{ github.sha }}"
 
           # Enumerate the per-platform manifest digests from the manifest list
           # so we inspect BOTH linux/amd64 and linux/arm64, not just the runner's
@@ -104,6 +109,18 @@ jobs:
             DIGEST="${entry##* }"
             echo "::group::Scanning $ARCH ($DIGEST)"
             docker pull "$IMAGE@$DIGEST"
+
+            ACTUAL_VERSION="$(docker image inspect "$IMAGE@$DIGEST" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+            ACTUAL_REVISION="$(docker image inspect "$IMAGE@$DIGEST" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+            if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+              echo "::error::$ARCH image has OCI version '$ACTUAL_VERSION'; expected '$EXPECTED_VERSION'"
+              FAIL=1
+            fi
+            if [ "$ACTUAL_REVISION" != "$EXPECTED_REVISION" ]; then
+              echo "::error::$ARCH image has OCI revision '$ACTUAL_REVISION'; expected '$EXPECTED_REVISION'"
+              FAIL=1
+            fi
+
             docker history --no-trunc "$IMAGE@$DIGEST" > "/tmp/history-$ARCH.txt"
             if grep -iE '(API_KEY|SECRET|TOKEN|PASSWORD)' "/tmp/history-$ARCH.txt"; then
               echo "::error::Secret-shaped string found in $ARCH image layers"
