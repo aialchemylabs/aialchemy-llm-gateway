@@ -95,6 +95,13 @@ COPY scripts/ /app/scripts/
 COPY tests/ /app/tests/
 
 RUN python scripts/verify_huggingface_embedding_provider_routing_contract.py
+
+# Prove LiteLLM's Claude subscription OAuth pass-through against the installed,
+# patched package: the gateway virtual key is never forwarded, a recognized
+# sk-ant-oat Authorization is retained and Anthropic-scoped, the OAuth value is
+# redacted from logging, and no server-side Anthropic key is required.
+RUN python scripts/verify_claude_oauth_passthrough_contract.py
+
 RUN python -m unittest discover -s tests -p 'test_*.py' -t . -v
 
 # Bake the Prisma engine binaries into the image for database-backed virtual

@@ -13,7 +13,7 @@ PATCH_MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PATCH_MODULE)
 
 
-LITELLM_1_97_FRAGMENT = '''    model_info: dict[str, Any] = {}
+LITELLM_1_99_FRAGMENT = '''    model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -31,10 +31,10 @@ class PatchLiteLLMChatGPTResponsesBridgeTests(unittest.TestCase):
             self.assertNotIn(PATCH_MODULE.OLD_BLOCK, patched)
             self.assertIn(PATCH_MODULE.NEW_BLOCK, patched)
 
-    def test_routes_1_97_chatgpt_calls_through_responses_bridge(self) -> None:
+    def test_routes_1_99_chatgpt_calls_through_responses_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "main.py"
-            target.write_text(LITELLM_1_97_FRAGMENT, encoding="utf-8")
+            target.write_text(LITELLM_1_99_FRAGMENT, encoding="utf-8")
 
             self.assertEqual(PATCH_MODULE.patch_file(target), "patched")
             patched = target.read_text(encoding="utf-8")

@@ -15,11 +15,14 @@ from importlib.util import find_spec
 from pathlib import Path
 
 
-OLD_BLOCK = '''    model_info: dict[str, Any] = {}
+# LiteLLM 1.99.0 moved this logic into `responses_api_bridge_check()` in
+# litellm/main.py and annotates the local as `dict[str, object]` (it was
+# `dict[str, Any]` in 1.97.0). The anchor below tracks the 1.99.0 source.
+OLD_BLOCK = '''    model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.'''
 
-NEW_BLOCK = '''    model_info: dict[str, Any] = {}
+NEW_BLOCK = '''    model_info: dict[str, object] = {}
 
     # The ChatGPT subscription transport is Responses-only. Completion-shaped
     # callers (including the Anthropic Messages proxy) must enter LiteLLM's

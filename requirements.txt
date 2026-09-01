@@ -1,21 +1,20 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.97.0, the currently validated AI Alchemy gateway release.
-# This is an intentional stability pin, not a claim that 1.97.0 is always the
+# Chosen: 1.99.0, the currently validated AI Alchemy gateway release.
+# This is an intentional stability pin, not a claim that 1.99.0 is always the
 # newest upstream release. Upgrade only through a reviewed build and semantic
 # ChatGPT subscription/Hugging Face routing validation.
-litellm[proxy]==1.97.0
+litellm[proxy]==1.99.0
 
-# FastAPI — pinned to work around an upstream LiteLLM bug, NOT a preference.
-# LiteLLM 1.97.0 includes litellm/proxy/management_endpoints/management_v1/
-# common.py, which does `from fastapi.dependencies.utils import
-# get_flat_dependant`. FastAPI removed that symbol in 0.141.0, but LiteLLM's
-# own constraint is still the loose `fastapi>=0.136.3,<1.0`, so a fresh
-# resolve picks 0.141.x and `import litellm.proxy.proxy_server` dies with
-# ImportError at container start. 0.140.1 is the last release that exports it.
-# Tracked upstream as BerriAI/litellm#35763. Although the issue is closed,
-# the incompatible import is still present in the published 1.97.0 source.
-# Drop this pin only after a released source and image smoke test prove it safe.
-fastapi==0.140.1
+# FastAPI — intentionally NOT pinned here.
+# The 1.97.0 gateway pinned fastapi==0.140.1 to work around
+# litellm/proxy/management_endpoints/management_v1/common.py doing
+# `from fastapi.dependencies.utils import get_flat_dependant`, a symbol FastAPI
+# removed in 0.141.0 (tracked as BerriAI/litellm#35763). LiteLLM 1.99.0 fixes
+# this: management_v1/common.py now uses `get_flat_params()` for
+# fastapi>=0.140.7, so `import litellm.proxy.proxy_server` and the management_v1
+# routes import cleanly against the naturally-resolved fastapi (0.141.x at the
+# time of this upgrade). Re-add an explicit pin only if a future released
+# source and image smoke test proves a new incompatibility.
 
 # Prometheus callback — required when
 # litellm_settings.callbacks includes "prometheus". LiteLLM's [proxy] extra
