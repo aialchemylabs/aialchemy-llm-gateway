@@ -50,8 +50,8 @@ from pathlib import Path
 
 OLD_IMPORTS = """import json
 import os
-from collections.abc import Callable
-from typing import Any, Final, Literal, get_args
+from collections.abc import Sequence
+from typing import Final, Literal, Protocol, get_args
 
 import httpx
 
@@ -75,8 +75,8 @@ HF_HUB_URL: Final = "https://huggingface.co"
 
 NEW_IMPORTS = """import json
 import os
-from collections.abc import Callable
-from typing import Any, Final, Literal, get_args
+from collections.abc import Sequence
+from typing import Final, Literal, Protocol, get_args
 
 import httpx
 
@@ -137,7 +137,7 @@ OLD_PROCESS_RESPONSE = '''    def _process_embedding_response(
         model_response: EmbeddingResponse,
         model: str,
         input: list,
-        encoding: Any,
+        encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
         if "similarities" in embeddings:'''
@@ -148,7 +148,7 @@ NEW_PROCESS_RESPONSE = '''    def _process_embedding_response(
         model_response: EmbeddingResponse,
         model: str,
         input: list,
-        encoding: Any,
+        encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
         if "data" in embeddings and isinstance(embeddings["data"], list):
@@ -174,7 +174,7 @@ OLD_EMBEDDING_METHOD_HEADER = '''    def embedding(
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout = httpx.Timeout(None),
@@ -240,7 +240,7 @@ NEW_EMBEDDING_METHOD_HEADER = '''    def embedding(
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout = httpx.Timeout(None),
@@ -333,7 +333,7 @@ OLD_AEMBEDDING_METHOD = '''    async def aembedding(
         api_base: str,
         api_key: str | None,
         headers: dict,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
     ):
         ## TRANSFORMATION ##
@@ -356,7 +356,7 @@ NEW_AEMBEDDING_METHOD = '''    async def aembedding(
         api_base: str,
         api_key: str | None,
         headers: dict,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
         prepared_data: dict | None = None,
     ):

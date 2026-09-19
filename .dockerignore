@@ -4,3 +4,5 @@
 .env*
 LICENSE
 NOTICE
+tmp/
+docs/evidence/

@@ -13,9 +13,11 @@ SCRIPT_PATH = (
     / "patch_litellm_chatgpt_reasoning_effort.py"
 )
 
-UPSTREAM_FRAGMENT = '''    if effort not in ("max", "xhigh", "minimal"):
+UPSTREAM_FRAGMENT = '''    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
+    if chain is None:
         return effort
 
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
 '''
 

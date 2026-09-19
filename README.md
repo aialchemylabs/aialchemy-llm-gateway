@@ -6,7 +6,7 @@ image so upgrades happen only when `requirements.txt` is reviewed and changed.
 
 ## Current image contract
 
-The image currently pins `litellm[proxy]==1.99.0` on `python:3.13-slim` and
+The image currently pins `litellm[proxy]==1.101.0` on `python:3.13-slim` and
 adds the runtime dependencies needed for metrics, tracing, and database-backed
 proxy features.
 
@@ -21,6 +21,11 @@ AI Alchemy workloads:
 - Explicit `xhigh` and `max` reasoning effort on dynamic ChatGPT model names.
 - Named Hugging Face inference-provider routing for
   `huggingface/<provider>/<org>/<model>` embeddings.
+- TypeSafe Jev native pass-through, backported from upstream
+  [#41607](https://github.com/BerriAI/litellm/pull/41607) and
+  [#41723](https://github.com/BerriAI/litellm/pull/41723). These changes landed
+  after the 1.101.0 stable release; remove the backport once the pinned release
+  provides equivalent behavior and its contract checks pass.
 
 Every retained source patch is fail-closed at image build time and has a
 regression test. When the pinned LiteLLM source no longer matches a patch's
@@ -63,7 +68,7 @@ docker run --rm \
   -e LITELLM_MASTER_KEY=sk-replace-at-runtime \
   -v ./config.yaml:/app/config.yaml:ro \
   -p 127.0.0.1:4000:4000 \
-  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.99.0
+  ghcr.io/aialchemylabs/aialchemy-llm-gateway:v1.101.0
 ```
 
 The loopback bind in this example is intentional. Production networking is
@@ -71,7 +76,8 @@ owned by deployment infrastructure and must keep the service private.
 
 ## Included runtime dependencies
 
-- `fastapi==0.140.1`: compatibility pin for LiteLLM 1.97.0 proxy imports.
+- FastAPI is resolved through LiteLLM's dependencies; the old 1.97.0
+  compatibility pin is no longer required.
 - `prometheus-client==0.20.0`: Prometheus callback support.
 - OpenTelemetry API, SDK, and OTLP HTTP exporter `1.31.1`: tracing support.
 - `prisma==0.11.0`, Node.js, and `libatomic1`: database-backed LiteLLM
@@ -79,6 +85,25 @@ owned by deployment infrastructure and must keep the service private.
 
 These dependencies are pinned with LiteLLM and must be reviewed together during
 an upgrade.
+
+## TypeSafe through the gateway
+
+Deployment infrastructure must inject `TYPESAFE_API_KEY` into the gateway at
+runtime. Applications use their server-held LiteLLM virtual key to call
+`POST /typesafe/v1/systemone` with TypeSafe's native `state`, `model`, and
+`questions` body. Set a TypeSafe SDK's base URL to
+`http://<private-gateway>:4000/typesafe`; `GET /typesafe/v1/models` supports
+model discovery. Keep the provider key in the gateway, never in a browser.
+
+Jev returns typed choices, scores and probabilities. The pass-through preserves
+that response and records input/output usage and registry-priced cost under
+the returned model version. It does not expose Jev as a `/chat/completions`
+model, and does not provide streaming or end-user tracking. See the
+[upstream integration documentation](https://docs.litellm.ai/docs/pass_through/typesafe).
+
+The backport's offline contract verifies request/response forwarding,
+authentication, provider credential isolation and usage/cost handling using
+synthetic inputs. A real TypeSafe canary still requires a runtime provider key.
 
 ## Building locally
 
@@ -94,6 +119,9 @@ it does not prove provider credentials, quota, runtime routing, or semantic
 responses in a deployed environment.
 
 ## Image publication
+
+Pull requests build both architectures and execute the image's compatibility
+contracts without publishing an image or receiving provider credentials.
 
 CI publishes signed multi-architecture images for `linux/amd64` and
 `linux/arm64` with provenance, an SBOM, and OCI `version` and `revision`
@@ -114,8 +142,15 @@ For reproducible deployment, pin the published image digest.
 3. Build the image. Every retained patch and contract check must pass against
    the new source.
 4. Prove ChatGPT subscription chat, Responses, streaming/non-streaming,
-   structured output, reasoning effort, and Hugging Face embedding routing.
-5. Publish and deploy only after those semantic canaries pass.
+   structured output, reasoning effort, Hugging Face embedding routing and
+   TypeSafe forwarding, authentication and usage/cost handling.
+5. Validate database migrations against a disposable database. The 1.101.0
+   upgrade changes budget and shadow-evaluation tables; Prisma client
+   generation alone does not validate a database upgrade. Back up the deployed
+   database before rollout and retain the previous image digest.
+6. Publish and deploy only after those semantic canaries pass. Runtime rollout
+   and provider secrets belong to Core Infra; this repository's PR does not
+   upgrade the running gateway.
 
 Do not replace the pinned Python build with the floating upstream LiteLLM
 Docker image.

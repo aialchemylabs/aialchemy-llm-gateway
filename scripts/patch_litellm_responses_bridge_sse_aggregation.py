@@ -23,8 +23,8 @@ OLD_SYNC_BLOCK = '''    def _collect_response_from_stream(self, stream_iter: Any
         for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -53,8 +53,8 @@ NEW_SYNC_BLOCK = '''    @staticmethod
         for event in stream_iter:
             self._record_completed_output_item(event, output_items)
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -71,8 +71,8 @@ OLD_ASYNC_BLOCK = '''    async def _collect_response_from_stream_async(self, str
         async for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -88,8 +88,8 @@ NEW_ASYNC_BLOCK = '''    async def _collect_response_from_stream_async(self, str
         async for event in stream_iter:
             self._record_completed_output_item(event, output_items)
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 

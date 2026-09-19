@@ -8,8 +8,9 @@ Version 2.0.
 The image installs a pinned upstream LiteLLM Python release and applies the
 AI Alchemy compatibility patches documented in README.md. Those changes cover
 ChatGPT subscription request/response compatibility and named Hugging Face
-embedding-provider routing. The image does not include WorkOS authentication or
-AI Alchemy custom guardrails.
+embedding-provider routing, plus the TypeSafe Jev pass-through backport from
+BerriAI/litellm pull requests #41607 and #41723. The image does not include
+WorkOS authentication or AI Alchemy custom guardrails.
 
 LiteLLM is a trademark of BerriAI. This project is not affiliated with,
 sponsored by, or endorsed by BerriAI.

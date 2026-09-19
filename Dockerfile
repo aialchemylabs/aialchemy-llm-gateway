@@ -104,6 +104,11 @@ RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
 COPY scripts/ /app/scripts/
 COPY tests/ /app/tests/
 
+# Stable 1.101.0 predates upstream's TypeSafe Jev pass-through and methods fix.
+# Apply the exact-source-checked backport before importing its route/handlers.
+RUN python scripts/patch_litellm_typesafe_passthrough.py
+RUN python scripts/verify_typesafe_passthrough_contract.py
+
 RUN python scripts/verify_huggingface_embedding_provider_routing_contract.py
 
 # Prove LiteLLM's Claude subscription OAuth pass-through against the installed,

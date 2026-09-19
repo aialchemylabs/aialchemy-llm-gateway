@@ -1,9 +1,9 @@
 # LiteLLM proxy — pinned for reproducible image builds.
-# Chosen: 1.99.0, the currently validated AI Alchemy gateway release.
-# This is an intentional stability pin, not a claim that 1.99.0 is always the
+# Chosen: 1.101.0, with the upstream TypeSafe pass-through backport.
+# This is an intentional stability pin, not a claim that 1.101.0 is always the
 # newest upstream release. Upgrade only through a reviewed build and semantic
 # ChatGPT subscription/Hugging Face routing validation.
-litellm[proxy]==1.99.0
+litellm[proxy]==1.101.0
 
 # FastAPI — intentionally NOT pinned here.
 # The 1.97.0 gateway pinned fastapi==0.140.1 to work around
