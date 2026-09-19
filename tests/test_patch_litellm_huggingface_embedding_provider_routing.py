@@ -14,8 +14,8 @@ SCRIPT_PATH = (
 
 UPSTREAM_IMPORTS = '''import json
 import os
-from collections.abc import Callable
-from typing import Any, Final, Literal, get_args
+from collections.abc import Sequence
+from typing import Final, Literal, Protocol, get_args
 
 import httpx
 
@@ -43,7 +43,7 @@ UPSTREAM_PROCESS_RESPONSE = '''    def _process_embedding_response(
         model_response: EmbeddingResponse,
         model: str,
         input: list,
-        encoding: Any,
+        encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
         if "similarities" in embeddings:'''
@@ -59,7 +59,7 @@ UPSTREAM_AEMBEDDING = '''    async def aembedding(
         api_base: str,
         api_key: str | None,
         headers: dict,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
     ):
         ## TRANSFORMATION ##
@@ -79,7 +79,7 @@ UPSTREAM_EMBEDDING_HEADER = '''    def embedding(
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout = httpx.Timeout(None),

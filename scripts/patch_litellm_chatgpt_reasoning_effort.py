@@ -16,13 +16,16 @@ from importlib.util import find_spec
 from pathlib import Path
 
 
-OLD_BLOCK = '''    if effort not in ("max", "xhigh", "minimal"):
+OLD_BLOCK = '''    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
+    if chain is None:
         return effort
 
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
 '''
 
-NEW_BLOCK = '''    if effort not in ("max", "xhigh", "minimal"):
+NEW_BLOCK = '''    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
+    if chain is None:
         return effort
 
     # Dynamic ChatGPT subscription routes can expose models before LiteLLM's
@@ -35,6 +38,7 @@ NEW_BLOCK = '''    if effort not in ("max", "xhigh", "minimal"):
     if is_chatgpt_subscription and effort in ("max", "xhigh"):
         return effort
 
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
 '''
 
