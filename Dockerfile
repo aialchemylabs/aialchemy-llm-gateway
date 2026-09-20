@@ -104,6 +104,11 @@ RUN python -c "import litellm.proxy.proxy_server; import prometheus_client"
 COPY scripts/ /app/scripts/
 COPY tests/ /app/tests/
 
+# Gemini 3.8 Live Extended Thinking rejects setup without a thinking level.
+# Default only that model to MEDIUM in the native Realtime adapter.
+RUN python scripts/patch_litellm_gemini_live_thinking.py
+RUN python scripts/verify_gemini_live_thinking_contract.py
+
 # Stable 1.101.0 predates upstream's TypeSafe Jev pass-through and methods fix.
 # Apply the exact-source-checked backport before importing its route/handlers.
 RUN python scripts/patch_litellm_typesafe_passthrough.py

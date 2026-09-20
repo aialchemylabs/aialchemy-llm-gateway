@@ -21,6 +21,8 @@ AI Alchemy workloads:
 - Explicit `xhigh` and `max` reasoning effort on dynamic ChatGPT model names.
 - Named Hugging Face inference-provider routing for
   `huggingface/<provider>/<org>/<model>` embeddings.
+- The required `MEDIUM` thinking level for `gemini-3.8-live-extended-thinking`
+  in the native Gemini Realtime adapter, for initial and deferred setup.
 - TypeSafe Jev native pass-through, backported from upstream
   [#41607](https://github.com/BerriAI/litellm/pull/41607) and
   [#41723](https://github.com/BerriAI/litellm/pull/41723). These changes landed
