@@ -107,6 +107,13 @@ The backport's offline contract verifies request/response forwarding,
 authentication, provider credential isolation and usage/cost handling using
 synthetic inputs. A real TypeSafe canary still requires a runtime provider key.
 
+## Planned Perplexity integration
+
+The [Perplexity integration plan](docs/perplexity-integration-plan.md) defines
+the proposed Agent API route, the compatibility checks for the pinned image,
+and the companion Core Infra configuration and rollout. This is a plan;
+Perplexity has not been enabled or verified against a live provider account.
+
 ## Building locally
 
 ```bash
